@@ -4,13 +4,15 @@
 printf "ST_Chatelaine"
 
 # 脚本信息
-SCRIPT_COMMIT="initial"
+SCRIPT_DIR_INIT="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_COMMIT=$(git -C "${SCRIPT_DIR_INIT}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
 
 # 获取脚本本地版本
 get_script_version() {
-    if [[ -d "${SCRIPT_DIR}/.git" ]]; then
-        git -C "${SCRIPT_DIR}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -d "${script_dir}/.git" ]]; then
+        git -C "${script_dir}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
     else
         echo "v1.0.0"
     fi
