@@ -276,6 +276,205 @@ cleanup_old_backups() {
 }
 
 
+# 清理备份文件（多选删除）
+manage_backups_interactive() {
+    local backup_dir="${SCRIPT_DIR}/backups"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        gum style --foreground 196 "错误: 备份目录不存在"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    local all_backups=()
+    for backup_file in "${backup_dir}"/ST_Backup_*.tar.gz; do
+        [[ -f "$backup_file" ]] || continue
+        all_backups+=("$backup_file")
+    done
+    
+    if [[ ${#all_backups[@]} -eq 0 ]]; then
+        gum style --foreground 196 "当前没有备份文件"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    # 按时间排序（最新的在前）
+    IFS=$'\n' all_backups=($(ls -t "${all_backups[@]}" 2>/dev/null))
+    unset IFS
+    
+    gum style --foreground 212 --bold "备份文件列表"
+    gum style --foreground 245 "提示: 空格键多选，回车确认删除，Esc取消"
+    echo ""
+    
+    # 格式化备份列表显示
+    local backup_list=$(mktemp)
+    TEMP_FILES+=("$backup_list")
+    
+    for backup_file in "${all_backups[@]}"; do
+        local filename=$(basename "$backup_file")
+        local size=$(du -h "$backup_file" | cut -f1)
+        local file_time=$(stat -c %Y "$backup_file" 2>/dev/null || stat -f %m "$backup_file" 2>/dev/null)
+        local date_str=$(date -d "@$file_time" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$file_time" '+%Y-%m-%d %H:%M' 2>/dev/null)
+        
+        local type_tag="[自动]"
+        [[ "$filename" == *"_manual.tar.gz" ]] && type_tag="[手动]"
+        
+        echo "${date_str} | ${size} | ${type_tag} ${filename}" >> "$backup_list"
+    done
+    
+    local selected_lines=$(cat "$backup_list" | gum choose --no-limit --height=15 --header="选择要删除的备份文件（可多选）")
+    
+    if [[ -z "$selected_lines" ]]; then
+        gum style --foreground 99 "已取消删除"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 0
+    fi
+    
+    # 提取文件名并确认删除
+    local delete_count=0
+    local delete_files=()
+    
+    while IFS= read -r line; do
+        local filename=$(echo "$line" | awk -F' \\| ' '{print $NF}' | sed 's/^\[.*\] //')
+        delete_files+=("${backup_dir}/${filename}")
+        ((delete_count++))
+    done <<< "$selected_lines"
+    
+    echo ""
+    gum style --foreground 196 --bold "即将删除 ${delete_count} 个备份文件"
+    if ! gum confirm "确认删除这些备份文件吗？"; then
+        gum style --foreground 99 "已取消删除"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 0
+    fi
+    
+    # 执行删除
+    for file in "${delete_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            gum style --foreground 245 "删除: $(basename "$file")"
+            rm -f "$file"
+        fi
+    done
+    
+    gum style --foreground 212 "已删除 ${delete_count} 个备份文件"
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+    return 0
+}
+
+# 还原备份文件
+restore_backup_interactive() {
+    local backup_dir="${SCRIPT_DIR}/backups"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        gum style --foreground 196 "错误: 备份目录不存在"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    local all_backups=()
+    for backup_file in "${backup_dir}"/ST_Backup_*.tar.gz; do
+        [[ -f "$backup_file" ]] || continue
+        all_backups+=("$backup_file")
+    done
+    
+    if [[ ${#all_backups[@]} -eq 0 ]]; then
+        gum style --foreground 196 "当前没有备份文件"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    # 按时间排序（最新的在前）
+    IFS=$'\n' all_backups=($(ls -t "${all_backups[@]}" 2>/dev/null))
+    unset IFS
+    
+    local latest_backup="${all_backups[0]}"
+    local selected_backup=""
+    
+    # 询问是否还原最新备份
+    gum style --foreground 212 "最新备份文件: $(basename "$latest_backup")"
+    local size=$(du -h "$latest_backup" | cut -f1)
+    local file_time=$(stat -c %Y "$latest_backup" 2>/dev/null || stat -f %m "$latest_backup" 2>/dev/null)
+    local date_str=$(date -d "@$file_time" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$file_time" '+%Y-%m-%d %H:%M' 2>/dev/null)
+    gum style --foreground 245 "创建时间: ${date_str} | 大小: ${size}"
+    echo ""
+    
+    if gum confirm "是否还原此备份文件？"; then
+        selected_backup="$latest_backup"
+    else
+        # 显示备份列表供选择
+        gum style --foreground 212 --bold "备份文件列表"
+        gum style --foreground 245 "提示: 回车选择，Esc取消"
+        echo ""
+        
+        local backup_list=$(mktemp)
+        TEMP_FILES+=("$backup_list")
+        
+        for backup_file in "${all_backups[@]}"; do
+            local filename=$(basename "$backup_file")
+            local size=$(du -h "$backup_file" | cut -f1)
+            local file_time=$(stat -c %Y "$backup_file" 2>/dev/null || stat -f %m "$backup_file" 2>/dev/null)
+            local date_str=$(date -d "@$file_time" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$file_time" '+%Y-%m-%d %H:%M' 2>/dev/null)
+            
+            local type_tag="[自动]"
+            [[ "$filename" == *"_manual.tar.gz" ]] && type_tag="[手动]"
+            
+            echo "${date_str} | ${size} | ${type_tag} ${filename}" >> "$backup_list"
+        done
+        
+        local selected_line=$(cat "$backup_list" | gum filter --placeholder="搜索备份..." --height=15 --header="选择要还原的备份文件")
+        
+        if [[ -z "$selected_line" ]]; then
+            gum style --foreground 99 "已取消还原"
+            read -n 1 -s -r -p "按任意键返回主菜单..."
+            return 0
+        fi
+        
+        local filename=$(echo "$selected_line" | awk -F' \\| ' '{print $NF}' | sed 's/^\[.*\] //')
+        selected_backup="${backup_dir}/${filename}"
+    fi
+    
+    # 检查目标路径数据
+    local total_limit=5
+    local dir1="${ST_DIR}/data"
+    local count1=0
+    if [[ -d "$dir1" ]]; then
+        count1=$(find "$dir1" -type f 2>/dev/null | wc -l)
+    fi
+    
+    local dir2="${ST_DIR}/public/scripts/extensions/third-party"
+    local count2=0
+    if [[ -d "$dir2" ]]; then
+        count2=$(find "$dir2" -type f 2>/dev/null | wc -l)
+    fi
+    
+    local total_count=$((count1 + count2))
+    
+    # 如果目标路径有数据，警告可能冲突
+    if [[ $total_count -ge $total_limit ]]; then
+        echo ""
+        gum style --foreground 99 --bold "检测到酒馆存在用户数据 (${total_count} 个文件)"
+        gum style --foreground 245 "还原备份将与现有数据合并，可能覆盖同名文件"
+        echo ""
+        if ! gum confirm "是否确认合并还原？"; then
+            gum style --foreground 99 "已取消还原"
+            read -n 1 -s -r -p "按任意键返回主菜单..."
+            return 0
+        fi
+    fi
+    
+    # 执行还原
+    echo ""
+    gum style --foreground 99 "正在还原备份..."
+    if tar -xzf "$selected_backup" -C "$ST_DIR" 2>/dev/null; then
+        gum style --foreground 212 "备份还原完成！"
+    else
+        gum style --foreground 196 "还原失败，请检查备份文件完整性"
+    fi
+    
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+    return 0
+}
+
 # 解压
 restore_st() {
     local backup_file=$1 
@@ -973,7 +1172,8 @@ main() {
 
         clear
         gum style --foreground 212 --bold "ST_Chatelaine $(get_script_version)"
-        gum style --foreground 245 "项目地址: ${SCRIPT_REPO}"
+        gum style --foreground 245 "作者: 柳拂城"
+        gum style --foreground 245 "GitHub地址: ${SCRIPT_REPO}"
         echo "----------------------------------------"
         echo "脚本路径: ${SCRIPT_DIR}"
         if [[ "$IS_VALID" == "true" ]]; then
@@ -1015,14 +1215,15 @@ main() {
         echo "2. 酒馆版本操作 (更新/切换版本/分支)"
         echo "3. 备份酒馆文件"
         echo "4. 清理备份文件"
-        echo "5. 更新脚本"
+        echo "5. 还原备份文件"
+        echo "6. 更新脚本"
         if [[ "$AUTOSTART" == "true" ]]; then
-            echo "6. 取消脚本自启动"
+            echo "7. 取消脚本自启动"
         else
-            echo "6. 设置脚本自启动"
+            echo "7. 设置脚本自启动"
         fi
-        echo "7. 卸载脚本"
-        echo "8. 设置"
+        echo "8. 卸载脚本"
+        echo "9. 设置"
         echo "0. 退出"
         echo "----------------------------------------"
         read -n 1 -s -r -p "请输入: " choice
@@ -1154,10 +1355,12 @@ main() {
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             4)
-                gum style --foreground 245 "备份管理功能开发中..."
-                read -n 1 -s -r -p "按任意键返回主菜单..."
+                manage_backups_interactive
                 ;;
             5)
+                restore_backup_interactive
+                ;;
+            6)
                 gum style --foreground 212 "脚本当前版本: $(get_script_version)"
                 if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
                     local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
@@ -1189,14 +1392,14 @@ main() {
                 fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
-            6)
+            7)
                 set_autostart
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
-            7)
+            8)
                 uninstall_script
                 ;;
-            8)
+            9)
                 while true; do
                     clear
                     echo "----------------------------------------"
