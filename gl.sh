@@ -1599,8 +1599,9 @@ main() {
                     echo "4. 添加其它脚本启动方式至主菜单"
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
-                    read -p "请输入: " setting_choice
-
+                    read -n 1 -s -r -p  "请输入: " setting_choice
+                    echo ""
+                    
                     case $setting_choice in
                         1)
                             ST_DIR=$(select_dir_gui "${ST_DIR:-$HOME}")
