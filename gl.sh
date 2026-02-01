@@ -1,9 +1,17 @@
 #!/bin/bash
 
 # 脚本信息
-SCRIPT_VERSION="1.0.0"
 SCRIPT_COMMIT="initial"
 SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
+
+# 获取脚本本地版本
+get_script_version() {
+    if [[ -d "${SCRIPT_DIR}/.git" ]]; then
+        git -C "${SCRIPT_DIR}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
+    else
+        echo "v1.0.0"
+    fi
+}
 
 # 颜色
 RED='\033[0;31m'
@@ -114,13 +122,11 @@ if [[ "$(uname -o)" == "Android" && "$(uname -m)" == "armv7l" ]]; then
 fi
 
 # 备份
-# 参数: $1 = "manual" 表示手动备份，"auto" 或空表示自动备份
 backup_st() {
     local backup_type="${1:-auto}"
     local backup_dir="${SCRIPT_DIR}/backups"
     mkdir -p "$backup_dir"
     
-    # 如果是自动备份，检查1小时内是否已有备份
     if [[ "$backup_type" == "auto" ]]; then
         local one_hour_ago=$(date -d "1 hour ago" +%s 2>/dev/null || date -v-1H +%s 2>/dev/null)
         local recent_backup=""
@@ -368,12 +374,11 @@ check_version_status() {
         gum style --foreground 99 "状态: 有新版本可用"
     fi
     
-    echo "---"
-    
     # 显示脚本版本状态
     if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
         local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
         if [[ -n "$script_remote_commit" && "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
+            echo "----------------------------------------"
             gum style --foreground 212 "脚本更新可用"
         fi
     fi
@@ -442,13 +447,11 @@ select_tag_interactive() {
     gum style --foreground 245 "提示: 输入可搜索，方向键选择，回车确认，Esc退出"
     echo ""
     
-    # 使用 gum filter 进行版本选择，带时间戳显示
     local selected_tag=$(gum spin --spinner dot --title "正在加载版本列表..." -- \
         git -C "$ST_DIR" tag --sort=-creatordate --format='%(creatordate:short) | %(refname:short)' | \
         gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本" | \
         awk '{print $NF}')
     
-    # 用户取消选择
     if [[ -z "$selected_tag" ]]; then
         gum style --foreground 99 "已取消版本切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
@@ -458,21 +461,18 @@ select_tag_interactive() {
     gum style --foreground 212 "已选择版本: ${selected_tag}"
     echo ""
     
-    # 备份确认
     if ! gum confirm "是否备份当前数据后切换版本？"; then
         gum style --foreground 99 "已取消切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
     
-    # 执行备份
     if ! gum spin --spinner globe --title "正在备份当前数据..." -- backup_st; then
         gum style --foreground 196 "备份失败，取消切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
     
-    # 切换版本
     if gum spin --spinner dot --title "正在切换到版本 ${selected_tag}..." -- \
         git -C "$ST_DIR" checkout -f "$selected_tag"; then
         gum style \
@@ -481,6 +481,63 @@ select_tag_interactive() {
             "版本切换成功" "" "当前版本: ${selected_tag}"
     else
         gum style --foreground 196 --bold "切换失败，请检查版本号或仓库状态"
+    fi
+    
+    restore_latest
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+    return 0
+}
+
+select_branch_interactive() {
+    gum style --foreground 212 --bold "分支选择"
+    gum style --foreground 245 "提示: 输入可搜索，方向键选择，回车确认，Esc退出"
+    echo ""
+    
+    local selected_branch=$(gum spin --spinner dot --title "正在加载分支列表..." -- \
+        git -C "$ST_DIR" branch -r | grep -v 'HEAD' | sed 's/origin\///' | sed 's/^[ \t]*//' | \
+        gum filter --placeholder="搜索分支..." --height=15 --header="选择要切换的分支")
+    
+    if [[ -z "$selected_branch" ]]; then
+        gum style --foreground 99 "已取消分支切换"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    gum style --foreground 212 "已选择分支: ${selected_branch}"
+    echo ""
+    
+    if ! gum confirm "是否备份当前数据后切换分支？"; then
+        gum style --foreground 99 "已取消切换"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    if ! gum spin --spinner globe --title "正在备份当前数据..." -- backup_st; then
+        gum style --foreground 196 "备份失败，取消切换"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    if gum spin --spinner dot --title "正在切换到分支 ${selected_branch}..." -- \
+        git -C "$ST_DIR" checkout -f "$selected_branch"; then
+        
+        if gum spin --spinner dot --title "正在拉取最新代码..." -- \
+            git -C "$ST_DIR" pull origin "$selected_branch"; then
+            
+            if [[ -f "${ST_DIR}/package.json" ]]; then
+                gum spin --spinner dot --title "正在安装 npm 依赖..." -- \
+                    sh -c "cd '$ST_DIR' && npm install --no-audit --fund=false 2>&1"
+            fi
+            
+            gum style \
+                --foreground 212 --border-foreground 212 --border double \
+                --align center --width 50 --padding "1 2" \
+                "分支切换成功" "" "当前分支: ${selected_branch}"
+        else
+            gum style --foreground 196 "拉取最新代码失败"
+        fi
+    else
+        gum style --foreground 196 --bold "切换失败，请检查分支名或仓库状态"
     fi
     
     restore_latest
@@ -499,6 +556,24 @@ bash \"${script_path}\""
         echo ""
         if gum confirm "是否取消自启动？"; then
             sed -i '/# ST_Chatelaine Auto-start/,+1d' "$bashrc"
+            local latest_backup=$(ls -t "${bashrc}.backup."* 2>/dev/null | head -n 1)
+            if [[ -n "$latest_backup" ]]; then
+                gum style --foreground 99 "检测到备份文件"
+                if gum confirm "是否恢复之前的 .bashrc 配置？"; then
+                    cp "$latest_backup" "$bashrc"
+                    if grep -q "^# " "$bashrc" 2>/dev/null; then
+                        if gum confirm "检测到备份中有注释代码，是否取消注释？"; then
+                            sed -i 's/^# \(.*\)$/\1/' "$bashrc"
+                            gum style --foreground 212 "已恢复并取消注释"
+                        else
+                            gum style --foreground 212 "已恢复备份（保留注释）"
+                        fi
+                    else
+                        gum style --foreground 212 "已恢复之前的配置"
+                    fi
+                fi
+            fi
+            
             AUTOSTART="false"
             save_config
             gum style --foreground 212 "已取消自启动设置"
@@ -509,14 +584,11 @@ bash \"${script_path}\""
         gum style --foreground 99 "当前状态: 未启用自启动"
         echo ""
         
-        # 检测是否有其他启动代码（包括简单命令和复杂脚本块）
         local has_startup_code=false
         local startup_info=""
         
-        # 检测单行启动命令
         local single_line_count=$(grep -cE "^(bash|sh|source|\.)" "$bashrc" 2>/dev/null || echo "0")
-        
-        # 检测可能的脚本块（function、if、while、for等关键字）
+
         local script_block_count=$(grep -cE "^(function|if |while |for |case )" "$bashrc" 2>/dev/null || echo "0")
         
         if [[ $single_line_count -gt 0 ]] || [[ $script_block_count -gt 0 ]]; then
@@ -563,8 +635,8 @@ bash \"${script_path}\""
                     gum style --foreground 99 "正在备份并注释原代码..."
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
-                    # 给所有非注释行添加 # 注释
-                    sed -i 's/^[^#].*$/# &/' "$bashrc"
+                    # 只注释启动相关的行（bash、sh、source、. 开头以及代码块）
+                    sed -i -E 's/^(bash |sh |source |\. |function |if |while |for |case )/# \1/' "$bashrc"
                     
                     # 添加此脚本
                     echo "" >> "$bashrc"
@@ -572,7 +644,7 @@ bash \"${script_path}\""
                     AUTOSTART="true"
                     save_config
                     
-                    gum style --foreground 212 "✓ 已注释原代码并设置此脚本为自启动"
+                    gum style --foreground 212 "✓ 已注释原启动代码并设置此脚本为自启动"
                     gum style --foreground 245 "原配置已备份到: ${bashrc}.backup.*"
                     gum style --foreground 245 "如需恢复原代码，请手动去除注释符号"
                     ;;
@@ -642,25 +714,20 @@ uninstall_script() {
     echo ""
     gum style --foreground 99 "开始卸载..."
     
-    # 删除自启动
     local bashrc="${HOME}/.bashrc"
     if grep -q "ST_Chatelaine Auto-start" "$bashrc" 2>/dev/null; then
         sed -i '/# ST_Chatelaine Auto-start/,+1d' "$bashrc"
         gum style --foreground 212 "✓ 已移除自启动设置"
     fi
     
-    # 删除缓存文件
     rm -f "${SCRIPT_DIR}/.remote_version_cache" "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
     gum style --foreground 212 "✓ 已删除缓存文件"
     
-    # 删除配置文件
     rm -f "$CONFIG_FILE"
     gum style --foreground 212 "✓ 已删除配置文件"
     
-    # 删除脚本目录
     gum style --foreground 245 "正在删除脚本目录: ${SCRIPT_DIR}"
     
-    # 创建自删除脚本
     cat > "/tmp/uninstall_st_chatelaine.sh" << 'UNINSTALL_EOF'
 #!/bin/bash
 sleep 1
@@ -674,11 +741,9 @@ UNINSTALL_EOF
     gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
     sleep 2
     
-    # 执行自删除并退出
     exec bash "/tmp/uninstall_st_chatelaine.sh" "${SCRIPT_DIR}"
 }
 
-# 安装酒馆函数
 install_st() {
     gum style --foreground 99 "开始安装酒馆..."
     echo ""
@@ -706,7 +771,6 @@ install_st() {
     fi
 }
 
-# 目录选择函数
 select_dir_gui() {
     if ! command -v fzf &> /dev/null; then
         echo "正在安装 fzf..."
@@ -739,10 +803,8 @@ select_dir_gui() {
 }
 
 main() {
-    # 启动时预加载远程版本（后台静默执行）
     preload_remote_version
     
-    # 首次运行设置
     if [[ "$FIRST_RUN_SETUP" == "true" ]]; then
         clear
         echo ""
@@ -754,7 +816,6 @@ main() {
         echo ""
         echo ""
         
-        # 检查酒馆路径是否有效
         if [[ ! -d "${ST_DIR}" ]]; then
             gum style --foreground 99 --bold "未检测到酒馆路径"
             gum style --foreground 245 "请选择操作"
@@ -797,7 +858,6 @@ main() {
             echo ""
         fi
         
-        # 设置备份上限
         gum style --foreground 99 --bold "请设置自动备份上限"
         gum style --foreground 245 "手动备份不计入上限，建议值: 2-5 个"
         echo ""
@@ -820,14 +880,12 @@ main() {
         done
     fi
     
-    # 标记当前在主菜单
     local in_main_menu=true
     
     while true; do
-        # 检查是否有版本更新且仍在主菜单
         if [[ "$in_main_menu" == "true" && -f "${SCRIPT_DIR}/.version_updated" ]]; then
             rm -f "${SCRIPT_DIR}/.version_updated"
-            sleep 0.5  # 短暂延迟确保数据写入完成
+            sleep 0.5
         fi
         
         in_main_menu=true
@@ -839,7 +897,7 @@ main() {
         fi
 
         clear
-        gum style --foreground 212 --bold "ST_Chatelaine v${SCRIPT_VERSION}"
+        gum style --foreground 212 --bold "ST_Chatelaine $(get_script_version)"
         gum style --foreground 245 "项目地址: ${SCRIPT_REPO}"
         echo "----------------------------------------"
         echo "脚本路径: ${SCRIPT_DIR}"
@@ -895,7 +953,6 @@ main() {
         read -n 1 -s -r -p "请输入: " choice
         echo ""
         
-        # 离开主菜单
         in_main_menu=false
 
         case $choice in
@@ -973,6 +1030,7 @@ main() {
                             select_tag_interactive
                             ;;
                         3)
+                            select_branch_interactive
                             ;;
                         0) break ;;
                         *) echo "无效选项" ; sleep 1 ;;
@@ -999,10 +1057,7 @@ main() {
                     echo " 设置菜单"
                     echo "----------------------------------------"
                     echo "1. 修改酒馆路径"
-                    echo -n "2. 设置备份上限 (当前为: "
-                    gum style --foreground 99 "${BACKUP_LIMIT}"
-                    echo -n ")"
-                    echo ""
+                    echo "2. 设置备份上限 (当前为: ${BACKUP_LIMIT})"
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
                     read -p "请输入: " setting_choice
@@ -1036,7 +1091,7 @@ main() {
                 done
                 ;;
             6)
-                gum style --foreground 212 "脚本当前版本: v${SCRIPT_VERSION}"
+                gum style --foreground 212 "脚本当前版本: $(get_script_version)"
                 if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
                     local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
                     if [[ -n "$script_remote_commit" ]]; then
