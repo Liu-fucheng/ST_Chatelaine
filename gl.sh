@@ -354,6 +354,12 @@ get_local_version() {
 check_version_status() {
     LOCAL_VER=$(get_local_version)
     
+    # 检测当前分支
+    local current_branch=""
+    if [[ -d "${ST_DIR}/.git" ]]; then
+        current_branch=$(git -C "$ST_DIR" branch --show-current 2>/dev/null)
+    fi
+    
     # 尝试从缓存读取远程版本
     if [[ -f "${SCRIPT_DIR}/.remote_version_cache" ]]; then
         REMOTE_VER=$(cat "${SCRIPT_DIR}/.remote_version_cache")
@@ -364,8 +370,15 @@ check_version_status() {
         REMOTE_VER="检测中..."
     fi
 
-    gum style --foreground 255 "酒馆本地版本: ${LOCAL_VER}"
-    gum style --foreground 255 "酒馆最新版本: ${REMOTE_VER}"
+    # 显示本地版本，非 release 分支则显示分支名
+    if [[ -n "$current_branch" && "$current_branch" != "release" ]]; then
+        gum style --foreground 255 "酒馆本地版本: ${LOCAL_VER} (${current_branch})"
+    else
+        gum style --foreground 255 "酒馆本地版本: ${LOCAL_VER}"
+    fi
+    
+    # 显示最新版本（Release 分支）
+    gum style --foreground 255 "酒馆最新版本: ${REMOTE_VER} (Release)"
 
     if [[ "$LOCAL_VER" == "Unknown" ]]; then
         gum style --foreground 196 "状态: 无法识别本地 Git 版本"
@@ -450,9 +463,24 @@ select_tag_interactive() {
     gum style --foreground 245 "提示: 输入可搜索，方向键选择，回车确认，Esc退出"
     echo ""
     
+    # 检测当前分支
+    local current_branch=$(git -C "$ST_DIR" branch --show-current 2>/dev/null)
+    
+    # 确定要显示的tags范围
+    local tag_filter_branch="release"
+    if [[ -n "$current_branch" && "$current_branch" != "release" ]]; then
+        tag_filter_branch="$current_branch"
+        gum style --foreground 99 "当前分支: ${current_branch}"
+        gum style --foreground 245 "将显示 ${current_branch} 分支的版本"
+    else
+        gum style --foreground 99 "将显示 Release 分支的版本"
+    fi
+    echo ""
+    
+    # 获取指定分支的tags
     local selected_tag=$(gum spin --spinner dot --title "正在加载版本列表..." -- \
-        git -C "$ST_DIR" tag --sort=-creatordate --format='%(creatordate:short) | %(refname:short)' | \
-        gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本" | \
+        git -C "$ST_DIR" tag --merged "origin/${tag_filter_branch}" --sort=-creatordate --format='%(creatordate:short) | %(refname:short)' | \
+        gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本 (${tag_filter_branch})" | \
         awk '{print $NF}')
     
     if [[ -z "$selected_tag" ]]; then
