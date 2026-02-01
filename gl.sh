@@ -638,7 +638,7 @@ check_version_status() {
 
     if [[ "$LOCAL_VER" == "Unknown" ]]; then
         gum style --foreground 196 "状态: 无法识别本地 Git 版本"
-    elif [[ "$REMOTE_VER" == "检测中..." ]]; then
+    elif [[ "$REMOTE_VER" == "检测中..." ]] || [[ "$REMOTE_VER" == "--" ]]; then
         gum style --foreground 245 "状态: 正在检测远程版本..."
     elif [[ "$LOCAL_VER" == "$REMOTE_VER" ]]; then
         gum style --foreground 212 "状态: 已是最新版本"
@@ -1049,48 +1049,31 @@ uninstall_script() {
     rm -f "$CONFIG_FILE"
     gum style --foreground 212 "✓ 已删除配置文件"
     
-    # 保存脚本目录路径
-    local target_dir="${SCRIPT_DIR}"
+    gum style --foreground 245 "正在删除脚本目录: ${SCRIPT_DIR}"
     
-    gum style --foreground 245 "正在删除脚本目录: ${target_dir}"
+
+    local uninstall_script="${HOME}/.uninstall_st_chatelaine.sh"
     
-    # 使用 HOME 目录下的临时脚本（Termux 环境下更可靠）
-    local uninstall_script="${HOME}/.uninstall_st_chatelaine_$(date +%s).sh"
-    
-    cat > "$uninstall_script" << UNINSTALL_EOF
+    cat > "$uninstall_script" << 'UNINSTALL_EOF'
 #!/bin/bash
 sleep 1
-if [[ -d "${target_dir}" ]]; then
-    rm -rf "${target_dir}"
-    echo ""
-    echo "✓ 脚本目录已删除: ${target_dir}"
+if [[ -d "${1}" ]]; then
+    rm -rf "${1}"
+    echo "✓ 脚本目录已删除: ${1}"
 else
-    echo ""
-    echo "✓ 目录已不存在: ${target_dir}"
+    echo "✓ 目录已不存在: ${1}"
 fi
-echo "✓ 脚本已完全卸载！"
-echo ""
+echo "脚本已卸载完成！"
 sleep 2
-rm -f "\$0"
+rm -f "$0"
 UNINSTALL_EOF
     
     chmod +x "$uninstall_script"
     
-    if [[ ! -x "$uninstall_script" ]]; then
-        gum style --foreground 196 "错误: 无法创建卸载脚本"
-        gum style --foreground 99 "正在直接删除..."
-        cd "$HOME"
-        rm -rf "${target_dir}"
-        gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
-        sleep 2
-        exit 0
-    fi
-    
     gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
     sleep 1
     
-    cd "$HOME"
-    exec bash "$uninstall_script"
+    exec bash "$uninstall_script" "${SCRIPT_DIR}"
 }
 
 install_st() {
