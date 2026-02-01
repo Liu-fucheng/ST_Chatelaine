@@ -589,31 +589,27 @@ get_local_version() {
 check_version_status() {
     LOCAL_VER=$(get_local_version)
     
-    # 检测当前分支
     local current_branch=""
     if [[ -d "${ST_DIR}/.git" ]]; then
         current_branch=$(git -C "$ST_DIR" branch --show-current 2>/dev/null)
     fi
     
-    # 尝试从缓存读取远程版本
     if [[ -f "${SCRIPT_DIR}/.remote_version_cache" ]]; then
         REMOTE_VER=$(cat "${SCRIPT_DIR}/.remote_version_cache")
     fi
-    
-    # 如果缓存为空，显示检测中
+
     if [[ -z "$REMOTE_VER" ]]; then
         REMOTE_VER="检测中..."
     fi
 
-    # 显示本地版本，非 release 分支则显示分支名
     if [[ -n "$current_branch" && "$current_branch" != "release" ]]; then
         gum style --foreground 255 "酒馆本地版本: ${LOCAL_VER} (${current_branch})"
+        gum style --foreground 255 "酒馆最新版本: ${REMOTE_VER} (Release)"
     else
         gum style --foreground 255 "酒馆本地版本: ${LOCAL_VER}"
+        gum style --foreground 255 "酒馆最新版本: ${REMOTE_VER}"
     fi
     
-    # 显示最新版本（Release 分支）
-    gum style --foreground 255 "酒馆最新版本: ${REMOTE_VER} (Release)"
 
     if [[ "$LOCAL_VER" == "Unknown" ]]; then
         gum style --foreground 196 "状态: 无法识别本地 Git 版本"
@@ -625,7 +621,6 @@ check_version_status() {
         gum style --foreground 99 "状态: 有新版本可用"
     fi
     
-    # 显示脚本版本状态
     if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
         local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
         if [[ -n "$script_remote_commit" && "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
@@ -1414,14 +1409,17 @@ main() {
                     fi
                 fi
                 
+                # 安装依赖
                 gum style --foreground 212 "正在安装 npm 依赖..."
                 echo ""
+                echo "----------------------------------------"
                 
-                if gum spin --spinner dot --title "执行 npm install..." -- \
-                    npm install; then
+                if npm install; then
+                    echo "----------------------------------------"
                     echo ""
                     gum style --foreground 212 "✓ 依赖安装成功！"
                 else
+                    echo "----------------------------------------"
                     echo ""
                     gum style --foreground 196 "✗ 依赖安装失败"
                     gum style --foreground 99 "请检查网络连接或手动执行 'cd $ST_DIR && npm install'"
