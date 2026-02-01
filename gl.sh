@@ -39,22 +39,36 @@ CONFIG_FILE="${SCRIPT_DIR}/config.txt"
 
 # 读取配置函数
 load_config() {
+    local first_run=false
+    local backup_limit_set=false
+    
     if [[ -f "$CONFIG_FILE" ]]; then
         while IFS='=' read -r key value; do
             case "$key" in
                 ST_DIR) ST_DIR="$value" ;;
-                BACKUP_LIMIT) BACKUP_LIMIT="$value" ;;
+                BACKUP_LIMIT) 
+                    BACKUP_LIMIT="$value"
+                    backup_limit_set=true
+                    ;;
             esac
         done < "$CONFIG_FILE"
+    else
+        first_run=true
     fi
     
     # 设置默认值
     [[ -z "$ST_DIR" ]] && ST_DIR="$(dirname "${SCRIPT_DIR}")/SillyTavern"
-    [[ -z "$BACKUP_LIMIT" ]] && BACKUP_LIMIT=2
     
-    # 验证备份上限
-    if ! [[ "$BACKUP_LIMIT" =~ ^[0-9]+$ ]] || [[ $BACKUP_LIMIT -lt 1 ]]; then
-        BACKUP_LIMIT=2
+    # 如果是首次运行或未设置备份上限，提示用户设置
+    if [[ "$first_run" == "true" ]] || [[ "$backup_limit_set" == "false" ]]; then
+        FIRST_RUN_SETUP=true
+        BACKUP_LIMIT=2  # 临时默认值
+    else
+        FIRST_RUN_SETUP=false
+        # 验证备份上限
+        if ! [[ "$BACKUP_LIMIT" =~ ^[0-9]+$ ]] || [[ $BACKUP_LIMIT -lt 1 ]]; then
+            BACKUP_LIMIT=2
+        fi
     fi
 }
 
@@ -483,11 +497,54 @@ select_dir_gui() {
         --prompt="目录搜索: " \
         --pointer="->" \
         --marker="✓" \
+        --color=fg:#d0d0d0,bg:#121212,hl:#5f87af \
+        --color=fg+:#ffffff,bg+:#262626,hl+:#5fd7ff \
+        --info=inline \
+        --preview 'ls -F --color=always {}' \
+        --preview-window 'right:50%:border-left')
+
+    if [[ -z "$selected_dir" ]]; then
+        return 1
+    fi
+
+    echo "$selected_dir"
+    return 0
+}
+
+main() {
     # 启动时预加载远程版本（后台静默执行）
     preload_remote_version
     
-    # 启动时预加载远程版本（后台静默执行）
-    preload_remote_version
+    # 首次运行设置
+    if [[ "$FIRST_RUN_SETUP" == "true" ]]; then
+        clear
+        gum style \
+            --foreground 212 --border-foreground 212 --border double \
+            --align center --width 60 --padding "1 2" \
+            "欢迎使用 ST_Chatelaine" "" "首次运行配置"
+        
+        echo ""
+        gum style --foreground 214 "请设置自动备份上限（手动备份不计入上限）"
+        gum style --foreground 245 "建议值: 2-5 个，可以节省磁盘空间"
+        echo ""
+        
+        local new_limit
+        while true; do
+            new_limit=$(gum input --placeholder "输入 1-99" --prompt "备份上限: " --width 20 --value "2")
+            
+            if [[ "$new_limit" =~ ^[0-9]+$ ]] && [[ $new_limit -ge 1 ]] && [[ $new_limit -le 99 ]]; then
+                BACKUP_LIMIT=$new_limit
+                save_config
+                gum style --foreground 212 "备份上限已设置为: $BACKUP_LIMIT"
+                FIRST_RUN_SETUP=false
+                sleep 1
+                break
+            else
+                gum style --foreground 196 "无效输入，请输入 1-99 之间的数字"
+                sleep 1
+            fi
+        done
+    fi
     
     # 标记当前在主菜单
     local in_main_menu=true
@@ -560,29 +617,12 @@ select_dir_gui() {
         echo ""
         
         # 离开主菜单
-        in_main_menu=false 0) exit 0 ;;
-                trap - INT TERM HUP
-                
-                *) ;;
-            esac
-            continue
-        fi
-
-        check_version_status
-        echo "----------------------------------------"
-        echo "1. 启动酒馆"
-        echo "2. 酒馆版本操作 (更新/切换版本/分支)"
-        echo "3. 备份酒馆文件"
-        echo "4. 清理备份文件"
-        echo "5. 设置"
-        echo "6. 更新脚本"
-        echo "0. 退出"
-        echo "----------------------------------------"
-        read -n 1 -s -r -p "请输入: " choice
-        echo ""
+        in_main_menu=false
 
         case $choice in
             1)
+                trap - INT TERM HUP
+                
                 gum style --foreground 51 "正在启动酒馆..."
                 gum style --foreground 214 "提示: 按 Ctrl+C 可返回主菜单"
                 echo ""
@@ -669,6 +709,10 @@ select_dir_gui() {
                 fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
+            4)
+                gum style --foreground 245 "备份管理功能开发中..."
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
             5)
                 while true; do
                     clear
@@ -708,6 +752,23 @@ select_dir_gui() {
                         *) echo "无效选项" ; sleep 1 ;;
                     esac
                 done
+                ;;
+            6)
+                gum style --foreground 212 "脚本当前版本: v${SCRIPT_VERSION}"
+                if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
+                    local script_remote=$(cat "${SCRIPT_DIR}/.script_version_cache")
+                    if [[ -n "$script_remote" ]]; then
+                        gum style --foreground 214 "远程最新版本: ${script_remote}"
+                        if [[ "$script_remote" != "$SCRIPT_VERSION" ]]; then
+                            gum style --foreground 51 "更新地址: ${SCRIPT_REPO}"
+                        else
+                            gum style --foreground 212 "已是最新版本"
+                        fi
+                    fi
+                else
+                    gum style --foreground 245 "正在检测远程版本..."
+                fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             0) 
                 cleanup
