@@ -565,13 +565,41 @@ restore_latest() {
 # 获取最新版本号（静默版本，失败返回空）
 get_remote_version() {
     local remote_tag=$(timeout 3s git ls-remote --tags --sort='v:refname' https://github.com/SillyTavern/SillyTavern.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
+    
+    if [[ -z "$remote_tag" ]]; then
+        remote_tag=$(timeout 3s git ls-remote --tags --sort='v:refname' https://hk.gh-proxy.org/https://github.com/SillyTavern/SillyTavern.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
+    fi
+    
     echo "$remote_tag"
 }
 
 # 获取脚本最新版本和commit
 get_script_remote_version() {
     local remote_commit=$(timeout 3s git ls-remote https://github.com/Liu-fucheng/ST_Chatelaine.git HEAD 2>/dev/null | cut -f1 | cut -c1-7)
+    
+    if [[ -z "$remote_commit" ]]; then
+        remote_commit=$(timeout 3s git ls-remote https://hk.gh-proxy.org/https://github.com/Liu-fucheng/ST_Chatelaine.git HEAD 2>/dev/null | cut -f1 | cut -c1-7)
+    fi
+    
     echo "$remote_commit"
+}
+
+# 设置 Git 远程仓库地址（优先直连，失败后使用镜像）
+setup_git_remote() {
+    local repo_path="$1"
+    local original_url="$2"
+    local mirror_url="https://hk.gh-proxy.org/$original_url"
+    
+    # 尝试直连
+    if timeout 3s git ls-remote "$original_url" HEAD &>/dev/null; then
+        git -C "$repo_path" remote set-url origin "$original_url" 2>/dev/null || true
+        return 0
+    else
+        # 使用镜像源
+        git -C "$repo_path" remote set-url origin "$mirror_url" 2>/dev/null || true
+        gum style --foreground 99 "网络不佳，已切换至镜像源"
+        return 1
+    fi
 }
 
 # 后台预加载远程版本（SillyTavern和脚本）
@@ -667,6 +695,9 @@ update_st() {
     fi
 
     git -C "$ST_DIR" config core.filemode false
+    
+    # 设置远程仓库地址
+    setup_git_remote "$ST_DIR" "https://github.com/SillyTavern/SillyTavern.git"
 
     local CURRENT_BRANCH=$(git -C "$ST_DIR" branch --show-current)
 
@@ -842,6 +873,9 @@ select_branch_interactive() {
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
+    
+    # 设置远程仓库地址
+    setup_git_remote "$ST_DIR" "https://github.com/SillyTavern/SillyTavern.git"
     
     if gum spin --spinner dot --title "正在切换到分支 ${selected_branch}..." -- \
         git -C "$ST_DIR" checkout -f "$selected_branch"; then
@@ -1093,15 +1127,27 @@ install_st() {
     fi
     
     local install_dir="$(dirname "${SCRIPT_DIR}")/SillyTavern"
+    
+    # 先尝试直连克隆
     if gum spin --spinner globe --title "克隆 SillyTavern 仓库..." -- \
-        git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir"; then
+        git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>/dev/null; then
         ST_DIR="$install_dir"
         save_config
         gum style --foreground 212 "酒馆安装成功！路径: $ST_DIR"
         return 0
     else
-        gum style --foreground 196 "安装失败，请检查网络连接"
-        return 1
+        # 直连失败，尝试镜像源
+        gum style --foreground 99 "直连失败，尝试使用镜像源..."
+        if gum spin --spinner globe --title "使用镜像源克隆..." -- \
+            git clone https://hk.gh-proxy.org/https://github.com/SillyTavern/SillyTavern -b release "$install_dir"; then
+            ST_DIR="$install_dir"
+            save_config
+            gum style --foreground 212 "酒馆安装成功！路径: $ST_DIR"
+            return 0
+        else
+            gum style --foreground 196 "安装失败，请检查网络连接"
+            return 1
+        fi
     fi
 }
 
@@ -1527,6 +1573,9 @@ main() {
                                         gum style --foreground 99 "检测到新版本可用"
                                         echo ""
                                         if gum confirm "是否立即更新脚本？"; then
+                                            # 设置远程仓库地址
+                                            setup_git_remote "${SCRIPT_DIR}" "https://github.com/Liu-fucheng/ST_Chatelaine.git"
+                                            
                                             if gum spin --spinner dot --title "正在拉取最新代码..." -- \
                                                 git -C "${SCRIPT_DIR}" pull origin main; then
                                                 rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
@@ -1555,6 +1604,9 @@ main() {
                                         gum style --foreground 99 "检测到新版本可用"
                                         echo ""
                                         if gum confirm "是否立即更新脚本？"; then
+                                            # 设置远程仓库地址
+                                            setup_git_remote "${SCRIPT_DIR}" "https://github.com/Liu-fucheng/ST_Chatelaine.git"
+                                            
                                             if gum spin --spinner dot --title "正在拉取最新代码..." -- \
                                                 git -C "${SCRIPT_DIR}" pull origin main; then
                                                 rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
