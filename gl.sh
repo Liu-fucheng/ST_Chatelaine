@@ -139,10 +139,10 @@ backup_st() {
         
         if [[ -n "$recent_backup" ]]; then
             local backup_age=$(( ($(date +%s) - $(stat -c %Y "$recent_backup" 2>/dev/null || stat -f %m "$recent_backup" 2>/dev/null)) / 60 ))
-            gum style --foreground 214 "检测到 ${backup_age} 分钟前已创建备份："
+            gum style --foreground 99 "检测到 ${backup_age} 分钟前已创建备份："
             gum style --foreground 245 "  $(basename "$recent_backup")"
             if ! gum confirm "是否仍要继续备份？"; then
-                gum style --foreground 51 "已取消备份"
+                gum style --foreground 99 "已取消备份"
                 return 0
             fi
         fi
@@ -224,7 +224,7 @@ cleanup_old_backups() {
     # 如果超过上限，删除旧的
     if [[ $total -gt $BACKUP_LIMIT ]]; then
         local to_delete=$((total - BACKUP_LIMIT))
-        gum style --foreground 214 "自动备份数量 ($total) 超过上限 ($BACKUP_LIMIT)，正在清理..."
+        gum style --foreground 99 "自动备份数量 ($total) 超过上限 ($BACKUP_LIMIT)，正在清理..."
         
         for ((i=BACKUP_LIMIT; i<total; i++)); do
             local old_backup="${auto_backups[$i]}"
@@ -282,7 +282,7 @@ restore_latest() {
     local total_count=$((count1 + count2))
 
     if [[ "$total_count" -lt "$total_limit" ]]; then
-        gum style --foreground 51 "检测到关键文件缺失，正在自动还原..."
+        gum style --foreground 99 "检测到关键文件缺失，正在自动还原..."
         gum spin --spinner dot --title "还原备份中..." -- restore_st "$latest_file"
     else
         gum style --foreground 212 "检测到数据完整，跳过自动还原"
@@ -365,14 +365,14 @@ check_version_status() {
     elif [[ "$LOCAL_VER" == "$REMOTE_VER" ]]; then
         gum style --foreground 212 "状态: 已是最新版本"
     else
-        gum style --foreground 51 "状态: 有新版本可用"
+        gum style --foreground 99 "状态: 有新版本可用"
     fi
     
     # 显示脚本版本状态
     if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
         local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
         if [[ -n "$script_remote_commit" && "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
-            gum style --foreground 51 "脚本更新可用"
+            gum style --foreground 99 "脚本更新可用"
         fi
     fi
 }
@@ -391,8 +391,8 @@ update_st() {
     local CURRENT_BRANCH=$(git -C "$ST_DIR" branch --show-current)
 
     if [[ -z "$CURRENT_BRANCH" ]]; then
-        gum style --foreground 214 "检测到当前处于特定版本锁定状态"
-        gum style --foreground 51 "正在切换回 release 分支..."
+        gum style --foreground 99 "检测到当前处于特定版本锁定状态"
+        gum style --foreground 99 "正在切换回 release 分支..."
         
         if ! gum spin --spinner dot --title "切换分支中..." -- \
             git -C "$ST_DIR" checkout -f release; then
@@ -420,7 +420,7 @@ update_st() {
                 sh -c "cd '$ST_DIR' && npm install --no-audit --fund=false 2>&1"; then
                 gum style --foreground 212 "依赖安装完成"
             else
-                gum style --foreground 214 "警告: 依赖安装可能遇到问题，请手动检查"
+                gum style --foreground 99 "警告: 依赖安装可能遇到问题，请手动检查"
             fi
         fi
 
@@ -448,7 +448,7 @@ select_tag_interactive() {
     
     # 用户取消选择
     if [[ -z "$selected_tag" ]]; then
-        gum style --foreground 214 "已取消版本切换"
+        gum style --foreground 99 "已取消版本切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
@@ -458,7 +458,7 @@ select_tag_interactive() {
     
     # 备份确认
     if ! gum confirm "是否备份当前数据后切换版本？"; then
-        gum style --foreground 214 "已取消切换"
+        gum style --foreground 99 "已取消切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
@@ -493,7 +493,7 @@ set_autostart() {
 bash \"${script_path}\""
     
     if grep -q "ST_Chatelaine Auto-start" "$bashrc" 2>/dev/null; then
-        gum style --foreground 214 "当前状态: 已启用自启动"
+        gum style --foreground 99 "当前状态: 已启用自启动"
         echo ""
         if gum confirm "是否取消自启动？"; then
             sed -i '/# ST_Chatelaine Auto-start/,+1d' "$bashrc"
@@ -501,10 +501,10 @@ bash \"${script_path}\""
             save_config
             gum style --foreground 212 "已取消自启动设置"
         else
-            gum style --foreground 51 "保持自启动设置"
+            gum style --foreground 99 "保持自启动设置"
         fi
     else
-        gum style --foreground 214 "当前状态: 未启用自启动"
+        gum style --foreground 99 "当前状态: 未启用自启动"
         echo ""
         
         # 检测是否有其他启动代码（包括简单命令和复杂脚本块）
@@ -525,11 +525,11 @@ bash \"${script_path}\""
         fi
         
         if [[ "$has_startup_code" == "true" ]]; then
-            gum style --foreground 214 --bold "⚠ 检测到 .bashrc 中已有启动代码："
+            gum style --foreground 99 --bold "⚠ 检测到 .bashrc 中已有启动代码："
             echo -e "$startup_info"
             echo ""
             
-            gum style --foreground 51 "请选择处理方式："
+            gum style --foreground 99 "请选择处理方式："
             local choice=$(gum choose \
                 "替换（清空 .bashrc 后仅添加此脚本）" \
                 "注释（保留原代码但注释掉）" \
@@ -541,11 +541,11 @@ bash \"${script_path}\""
                 "替换（清空 .bashrc 后仅添加此脚本）")
                     gum style --foreground 196 --bold "警告: 此操作将清空整个 .bashrc！"
                     if ! gum confirm "确认要清空并替换 .bashrc 吗？"; then
-                        gum style --foreground 51 "已取消操作"
+                        gum style --foreground 99 "已取消操作"
                         return
                     fi
                     
-                    gum style --foreground 214 "正在备份原 .bashrc..."
+                    gum style --foreground 99 "正在备份原 .bashrc..."
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
                     # 清空并添加此脚本
@@ -558,7 +558,7 @@ bash \"${script_path}\""
                     ;;
                     
                 "注释（保留原代码但注释掉）")
-                    gum style --foreground 214 "正在备份并注释原代码..."
+                    gum style --foreground 99 "正在备份并注释原代码..."
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
                     # 给所有非注释行添加 # 注释
@@ -581,11 +581,11 @@ bash \"${script_path}\""
                     AUTOSTART="true"
                     save_config
                     gum style --foreground 212 "✓ 已设置为自启动（与现有代码共存）"
-                    gum style --foreground 214 "注意: 多个启动脚本可能产生冲突"
+                    gum style --foreground 99 "注意: 多个启动脚本可能产生冲突"
                     ;;
                     
                 "查看后决定")
-                    gum style --foreground 51 "正在显示 .bashrc 内容..."
+                    gum style --foreground 99 "正在显示 .bashrc 内容..."
                     echo ""
                     cat -n "$bashrc"
                     echo ""
@@ -593,7 +593,7 @@ bash \"${script_path}\""
                     ;;
                     
                 "取消设置")
-                    gum style --foreground 51 "已取消设置"
+                    gum style --foreground 99 "已取消设置"
                     return
                     ;;
             esac
@@ -607,7 +607,7 @@ bash \"${script_path}\""
                 gum style --foreground 212 "已设置为自启动！"
                 gum style --foreground 245 "下次打开 Termux 将自动运行此脚本"
             else
-                gum style --foreground 51 "已取消设置"
+                gum style --foreground 99 "已取消设置"
             fi
         fi
     fi
@@ -617,7 +617,7 @@ bash \"${script_path}\""
 uninstall_script() {
     clear
     gum style --foreground 196 --bold "卸载脚本"
-    gum style --foreground 214 "此操作将删除："
+    gum style --foreground 99 "此操作将删除："
     echo "  1. 脚本文件及目录"
     echo "  2. 配置文件 (config.txt)"
     echo "  3. 自启动设置 (如果已设置)"
@@ -626,19 +626,19 @@ uninstall_script() {
     echo ""
     
     if ! gum confirm "确认要卸载脚本吗？此操作不可恢复！"; then
-        gum style --foreground 51 "已取消卸载"
+        gum style --foreground 99 "已取消卸载"
         return
     fi
     
     echo ""
-    gum style --foreground 214 "最后确认: 真的要删除脚本吗？"
+    gum style --foreground 99 "最后确认: 真的要删除脚本吗？"
     if ! gum confirm "再次确认卸载"; then
-        gum style --foreground 51 "已取消卸载"
+        gum style --foreground 99 "已取消卸载"
         return
     fi
     
     echo ""
-    gum style --foreground 51 "开始卸载..."
+    gum style --foreground 99 "开始卸载..."
     
     # 删除自启动
     local bashrc="${HOME}/.bashrc"
@@ -678,7 +678,7 @@ UNINSTALL_EOF
 
 # 安装酒馆函数
 install_st() {
-    gum style --foreground 51 "开始安装酒馆..."
+    gum style --foreground 99 "开始安装酒馆..."
     echo ""
     
     if ! gum spin --spinner dot --title "更新软件包..." -- pkg update; then
@@ -754,7 +754,7 @@ main() {
         
         # 检查酒馆路径是否有效
         if [[ ! -d "${ST_DIR}" ]]; then
-            gum style --foreground 214 --bold "未检测到酒馆路径"
+            gum style --foreground 99 --bold "未检测到酒馆路径"
             gum style --foreground 245 "请选择操作"
             echo ""
             
@@ -781,7 +781,7 @@ main() {
                     fi
                     ;;
                 "稍后在主菜单设置")
-                    gum style --foreground 51 "提示: 您可以在主菜单中选择安装酒馆或指定路径"
+                    gum style --foreground 99 "提示: 您可以在主菜单中选择安装酒馆或指定路径"
                     FIRST_RUN_SETUP=false
                     sleep 2
                     return
@@ -796,7 +796,7 @@ main() {
         fi
         
         # 设置备份上限
-        gum style --foreground 214 --bold "请设置自动备份上限"
+        gum style --foreground 99 --bold "请设置自动备份上限"
         gum style --foreground 245 "手动备份不计入上限，建议值: 2-5 个"
         echo ""
         
@@ -900,8 +900,8 @@ main() {
             1)
                 trap - INT TERM HUP
                 
-                gum style --foreground 51 "正在启动酒馆..."
-                gum style --foreground 214 "提示: 按 Ctrl+C 可返回主菜单"
+                gum style --foreground 99 "正在启动酒馆..."
+                gum style --foreground 99 "提示: 按 Ctrl+C 可返回主菜单"
                 echo ""
                 
                 bash "${ST_DIR}/start.sh"
@@ -949,7 +949,7 @@ main() {
                             fi
                             
                             if ! gum confirm "是否备份当前数据后更新？"; then
-                                gum style --foreground 214 "已取消更新"
+                                gum style --foreground 99 "已取消更新"
                                 read -n 1 -s -r -p "按任意键返回主菜单..."
                                 continue
                             fi
@@ -978,7 +978,7 @@ main() {
                 done
                 ;;
             3)
-                gum style --foreground 51 "开始手动备份..."
+                gum style --foreground 99 "开始手动备份..."
                 if backup_st "manual"; then
                     gum style --foreground 212 "备份成功"
                 else
@@ -1013,7 +1013,7 @@ main() {
                             ;;
                         2)
                             gum style --foreground 212 "当前自动备份上限: ${BACKUP_LIMIT}"
-                            gum style --foreground 214 "说明: 手动备份不计入上限，不会被自动清理"
+                            gum style --foreground 99 "说明: 手动备份不计入上限，不会被自动清理"
                             echo ""
                             
                             new_limit=$(gum input --placeholder "输入 1-99" --prompt "备份上限: " --width 20 --value "$BACKUP_LIMIT")
@@ -1038,8 +1038,8 @@ main() {
                     local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
                     if [[ -n "$script_remote_commit" ]]; then
                         if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
-                            gum style --foreground 51 "检测到新版本可用"
-                            gum style --foreground 214 "更新地址: ${SCRIPT_REPO}"
+                            gum style --foreground 99 "检测到新版本可用"
+                            gum style --foreground 99 "更新地址: ${SCRIPT_REPO}"
                         else
                             gum style --foreground 212 "已是最新版本"
                         fi
