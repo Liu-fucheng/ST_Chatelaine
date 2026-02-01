@@ -61,6 +61,8 @@ load_config() {
                     ;;
                 AUTOSTART) AUTOSTART="$value" ;;
                 HIGH_PERFORMANCE) HIGH_PERFORMANCE="$value" ;;
+                CUSTOM_SCRIPT_NAME) CUSTOM_SCRIPT_NAME="$value" ;;
+                CUSTOM_SCRIPT_PATH) CUSTOM_SCRIPT_PATH="$value" ;;
             esac
         done < "$CONFIG_FILE"
     else
@@ -95,6 +97,12 @@ BACKUP_LIMIT=$BACKUP_LIMIT
 AUTOSTART=$AUTOSTART
 HIGH_PERFORMANCE=$HIGH_PERFORMANCE
 EOF
+    
+    # 保存自定义脚本配置（如果存在）
+    if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
+        echo "CUSTOM_SCRIPT_NAME=$CUSTOM_SCRIPT_NAME" >> "$CONFIG_FILE"
+        echo "CUSTOM_SCRIPT_PATH=$CUSTOM_SCRIPT_PATH" >> "$CONFIG_FILE"
+    fi
 }
 
 # 加载配置
@@ -711,12 +719,33 @@ select_tag_interactive() {
     
     while IFS='|' read -r date tag; do
         # 检查tag属于哪些分支
-        local branches=$(git -C "$ST_DIR" branch -r --contains "$tag" 2>/dev/null | grep -v HEAD | sed 's/origin\///' | sed 's/^[ \t]*//' | tr '\n' ',' | sed 's/,$//')
+        local all_branches=$(git -C "$ST_DIR" branch -r --contains "$tag" 2>/dev/null | grep -v HEAD | sed 's/origin\///' | sed 's/^[ \t]*//')
         
-        if [[ -z "$branches" ]]; then
+        if [[ -z "$all_branches" ]]; then
             echo "${date} | ${tag} | (未合并)"
+            continue
+        fi
+        
+        local display_branches=""
+        if [[ "$current_branch" == "release" ]] || [[ -z "$current_branch" ]]; then
+            if echo "$all_branches" | grep -q "^release$"; then
+                echo "${date} | ${tag}"
+            fi
         else
-            echo "${date} | ${tag} | (${branches})"
+            local filtered_branches=""
+            while IFS= read -r branch; do
+                if [[ "$branch" == "release" ]] || [[ "$branch" == "$current_branch" ]]; then
+                    if [[ -z "$filtered_branches" ]]; then
+                        filtered_branches="$branch"
+                    else
+                        filtered_branches="${filtered_branches},${branch}"
+                    fi
+                fi
+            done <<< "$all_branches"
+            
+            if [[ -n "$filtered_branches" ]]; then
+                echo "${date} | ${tag} | (${filtered_branches})"
+            fi
         fi
     done < "$tag_list" > "$formatted_tags"
     
@@ -1213,17 +1242,13 @@ main() {
         echo "----------------------------------------"
         echo "1. 启动酒馆"
         echo "2. 酒馆版本操作 (更新/切换版本/分支)"
-        echo "3. 备份酒馆文件"
-        echo "4. 清理备份文件"
-        echo "5. 还原备份文件"
-        echo "6. 更新脚本"
-        if [[ "$AUTOSTART" == "true" ]]; then
-            echo "7. 取消脚本自启动"
-        else
-            echo "7. 设置脚本自启动"
+        echo "3. 安装/重装酒馆依赖"
+        echo "4. 备份相关"
+        echo "5. 脚本相关"
+        echo "6. 设置"
+        if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
+            echo "7. $CUSTOM_SCRIPT_NAME"
         fi
-        echo "8. 卸载脚本"
-        echo "9. 设置"
         echo "0. 退出"
         echo "----------------------------------------"
         read -n 1 -s -r -p "请输入: " choice
@@ -1346,60 +1371,163 @@ main() {
                 done
                 ;;
             3)
-                gum style --foreground 99 "开始手动备份..."
-                if backup_st "manual"; then
-                    gum style --foreground 212 "备份成功"
-                else
-                    gum style --foreground 196 "备份失败"
+                gum style --foreground 212 "开始安装/重装酒馆依赖..."
+                echo ""
+                
+                if [[ ! -d "$ST_DIR" ]]; then
+                    gum style --foreground 196 "错误: 酒馆目录不存在 ($ST_DIR)"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    continue
                 fi
+                
+                cd "$ST_DIR" || {
+                    gum style --foreground 196 "错误: 无法进入酒馆目录"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    continue
+                }
+                
+                if [[ ! -f "package.json" ]]; then
+                    gum style --foreground 196 "错误: 未找到 package.json 文件"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    continue
+                fi
+                
+                if ! command -v npm &> /dev/null; then
+                    gum style --foreground 196 "错误: npm 未安装，请先安装 Node.js"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    continue
+                fi
+                
+                gum style --foreground 99 "当前工作目录: $ST_DIR"
+                echo ""
+                
+                if [[ -d "node_modules" ]]; then
+                    if gum confirm "检测到已有依赖，是否清理后重新安装？"; then
+                        gum style --foreground 212 "正在清理旧依赖..."
+                        if gum spin --spinner dot --title "删除 node_modules..." -- \
+                            rm -rf node_modules package-lock.json; then
+                            gum style --foreground 212 "清理成功"
+                        else
+                            gum style --foreground 196 "清理失败，将尝试直接更新依赖"
+                        fi
+                        echo ""
+                    fi
+                fi
+                
+                gum style --foreground 212 "正在安装 npm 依赖..."
+                echo ""
+                
+                if gum spin --spinner dot --title "执行 npm install..." -- \
+                    npm install; then
+                    echo ""
+                    gum style --foreground 212 "✓ 依赖安装成功！"
+                else
+                    echo ""
+                    gum style --foreground 196 "✗ 依赖安装失败"
+                    gum style --foreground 99 "请检查网络连接或手动执行 'cd $ST_DIR && npm install'"
+                fi
+                
+                echo ""
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             4)
-                manage_backups_interactive
+                while true; do
+                    clear
+                    echo "----------------------------------------"
+                    echo " 备份相关菜单"
+                    echo "----------------------------------------"
+                    echo "1. 手动备份酒馆文件"
+                    echo "2. 清理备份文件"
+                    echo "3. 还原备份文件"
+                    echo "0. 返回主菜单"
+                    echo "----------------------------------------"
+                    read -n 1 -s -r -p "请输入: " backup_choice
+                    echo ""
+                    
+                    case $backup_choice in
+                        1)
+                            gum style --foreground 99 "开始手动备份..."
+                            if backup_st "manual"; then
+                                gum style --foreground 212 "备份成功"
+                            else
+                                gum style --foreground 196 "备份失败"
+                            fi
+                            read -n 1 -s -r -p "按任意键返回备份菜单..."
+                            ;;
+                        2)
+                            manage_backups_interactive
+                            ;;
+                        3)
+                            restore_backup_interactive
+                            ;;
+                        0) break ;;
+                        *) echo "无效选项" ; sleep 1 ;;
+                    esac
+                done
                 ;;
             5)
-                restore_backup_interactive
+                while true; do
+                    clear
+                    echo "----------------------------------------"
+                    echo " 脚本相关菜单"
+                    echo "----------------------------------------"
+                    echo "1. 更新脚本"
+                    if [[ "$AUTOSTART" == "true" ]]; then
+                        echo "2. 取消脚本自启动"
+                    else
+                        echo "2. 设置脚本自启动"
+                    fi
+                    echo "3. 卸载脚本"
+                    echo "0. 返回主菜单"
+                    echo "----------------------------------------"
+                    read -n 1 -s -r -p "请输入: " script_choice
+                    echo ""
+                    
+                    case $script_choice in
+                        1)
+                            gum style --foreground 212 "脚本当前版本: $(get_script_version)"
+                            if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
+                                local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
+                                if [[ -n "$script_remote_commit" ]]; then
+                                    if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
+                                        gum style --foreground 99 "检测到新版本可用"
+                                        echo ""
+                                        if gum confirm "是否立即更新脚本？"; then
+                                            if gum spin --spinner dot --title "正在拉取最新代码..." -- \
+                                                git -C "${SCRIPT_DIR}" pull origin main; then
+                                                rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
+                                                gum style --foreground 212 "更新成功！"
+                                                gum style --foreground 99 "请重启脚本以应用新版本"
+                                                echo ""
+                                                if gum confirm "是否立即重启脚本？"; then
+                                                    exec bash "${SCRIPT_DIR}/$(basename "$0")"
+                                                fi
+                                            else
+                                                gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
+                                            fi
+                                        fi
+                                    else
+                                        gum style --foreground 212 "已是最新版本"
+                                    fi
+                                fi
+                            else
+                                gum style --foreground 245 "正在检测远程版本..."
+                            fi
+                            read -n 1 -s -r -p "按任意键返回脚本菜单..."
+                            ;;
+                        2)
+                            set_autostart
+                            read -n 1 -s -r -p "按任意键返回脚本菜单..."
+                            ;;
+                        3)
+                            uninstall_script
+                            ;;
+                        0) break ;;
+                        *) echo "无效选项" ; sleep 1 ;;
+                    esac
+                done
                 ;;
             6)
-                gum style --foreground 212 "脚本当前版本: $(get_script_version)"
-                if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
-                    local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
-                    if [[ -n "$script_remote_commit" ]]; then
-                        if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
-                            gum style --foreground 99 "检测到新版本可用"
-                            echo ""
-                            if gum confirm "是否立即更新脚本？"; then
-                                if gum spin --spinner dot --title "正在拉取最新代码..." -- \
-                                    git -C "${SCRIPT_DIR}" pull origin main; then
-                                    # 清除版本缓存
-                                    rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
-                                    gum style --foreground 212 "更新成功！"
-                                    gum style --foreground 99 "请重启脚本以应用新版本"
-                                    echo ""
-                                    if gum confirm "是否立即重启脚本？"; then
-                                        exec bash "$0"
-                                    fi
-                                else
-                                    gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
-                                fi
-                            fi
-                        else
-                            gum style --foreground 212 "已是最新版本"
-                        fi
-                    fi
-                else
-                    gum style --foreground 245 "正在检测远程版本..."
-                fi
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                ;;
-            7)
-                set_autostart
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                ;;
-            8)
-                uninstall_script
-                ;;
-            9)
                 while true; do
                     clear
                     echo "----------------------------------------"
@@ -1408,6 +1536,7 @@ main() {
                     echo "1. 修改酒馆路径"
                     echo "2. 酒馆高性能模式启动 (防止内存泄漏)"
                     echo "3. 设置备份上限 (当前为: ${BACKUP_LIMIT})"
+                    echo "4. 添加其它脚本启动方式至主菜单"
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
                     read -p "请输入: " setting_choice
@@ -1460,10 +1589,61 @@ main() {
                             fi
                             read -n 1 -s -r -p "按任意键返回设置菜单..."
                             ;;
+                        4)
+                            gum style --foreground 212 --bold "添加其它脚本启动方式至主菜单"
+                            echo ""
+                            gum style --foreground 245 "说明: 将自定义脚本添加到主菜单，方便快速启动"
+                            echo ""
+                            
+                            local script_name=$(gum input --placeholder "输入脚本显示名称" --prompt "名称: " --width 40)
+                            if [[ -z "$script_name" ]]; then
+                                gum style --foreground 99 "已取消添加"
+                                read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                continue
+                            fi
+                            
+                            local script_path=$(gum input --placeholder "输入脚本完整路径" --prompt "路径: " --width 60)
+                            if [[ -z "$script_path" ]]; then
+                                gum style --foreground 99 "已取消添加"
+                                read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                continue
+                            fi
+                            
+                            # 验证路径是否存在
+                            if [[ ! -f "$script_path" ]]; then
+                                gum style --foreground 196 "错误: 脚本文件不存在"
+                                read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                continue
+                            fi
+                            
+                            # 保存到配置文件
+                            echo "CUSTOM_SCRIPT_NAME=$script_name" >> "$CONFIG_FILE"
+                            echo "CUSTOM_SCRIPT_PATH=$script_path" >> "$CONFIG_FILE"
+                            
+                            gum style --foreground 212 "已添加自定义脚本: $script_name"
+                            gum style --foreground 99 "提示: 请重启脚本以在主菜单中看到此选项"
+                            read -n 1 -s -r -p "按任意键返回设置菜单..."
+                            ;;
                         0) break ;;
                         *) echo "无效选项" ; sleep 1 ;;
                     esac
                 done
+                ;;
+            7)
+                if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
+                    if [[ -f "$CUSTOM_SCRIPT_PATH" ]]; then
+                        gum style --foreground 212 "正在启动: $CUSTOM_SCRIPT_NAME"
+                        bash "$CUSTOM_SCRIPT_PATH"
+                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                    else
+                        gum style --foreground 196 "错误: 脚本文件不存在"
+                        gum style --foreground 99 "路径: $CUSTOM_SCRIPT_PATH"
+                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                    fi
+                else
+                    gum style --foreground 196 "未配置自定义脚本"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                fi
                 ;;
             0) 
                 cd "$HOME"
