@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# 脚本信息
+SCRIPT_VERSION="1.0.0"
+SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
+
 # 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -269,15 +273,45 @@ restore_latest() {
     fi
 }
 
-# 获取最新版本号
+# 获取最新版本号（静默版本，失败返回空）
 get_remote_version() {
-    # 5 秒超时
-    local remote_tag=$(timeout 5s git ls-remote --tags --sort='v:refname' https://github.com/SillyTavern/SillyTavern.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
-    
-    if [[ -z "$remote_tag" ]]; then
-        echo "检测失败(超时)"
+    local remote_tag=$(timeout 3s git ls-remote --tags --sort='v:refname' https://github.com/SillyTavern/SillyTavern.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
+    echo "$remote_tag"
+}
+
+# 获取脚本最新版本
+get_script_remote_version() {
+    local remote_tag=$(timeout 3s git ls-remote --tags --sort='v:refname' https://github.com/Liu-fucheng/ST_Chatelaine.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
+    echo "$remote_tag"
+}
+
+# 后台预加载远程版本（SillyTavern和脚本）
+preload_remote_version() {
+    (
+        # 加载 SillyTavern 版本
+        REMOTE_VER=$(get_remote_version)
+        if [[ -n "$REMOTE_VER" ]]; then
+            echo "$REMOTE_VER" > "${SCRIPT_DIR}/.remote_version_cache"
+            # 设置刷新标志
+            touch "${SCRIPT_DIR}/.version_updated"
+        fi
+        
+        # 加载脚本版本
+        SCRIPT_REMOTE_VER=$(get_script_remote_version)
+        if [[ -n "$SCRIPT_REMOTE_VER" ]]; then
+            echo "$SCRIPT_REMOTE_VER" > "${SCRIPT_DIR}/.script_version_cache"
+            # 设置刷新标志
+            touch "${SCRIPT_DIR}/.version_updated"
+        fi
+    ) &
+}
+
+# 获取本地当前版本号
+get_local_version() {
+    if [[ -d "${ST_DIR}/.git" ]]; then
+        git -C "$ST_DIR" describe --tags --abbrev=0 2>/dev/null || echo "Unknown"
     else
-        echo "$remote_tag"
+        echo "未检测到 Git"
     fi
 }
 
@@ -293,17 +327,36 @@ get_local_version() {
 # 比对版本号
 check_version_status() {
     LOCAL_VER=$(get_local_version)
-    REMOTE_VER=$(get_remote_version)
+    
+    # 尝试从缓存读取远程版本
+    if [[ -f "${SCRIPT_DIR}/.remote_version_cache" ]]; then
+        REMOTE_VER=$(cat "${SCRIPT_DIR}/.remote_version_cache")
+    fi
+    
+    # 如果缓存为空，显示检测中
+    if [[ -z "$REMOTE_VER" ]]; then
+        REMOTE_VER="检测中..."
+    fi
 
     gum style --foreground 214 "本地版本: ${LOCAL_VER}"
     gum style --foreground 214 "远程最新: ${REMOTE_VER}"
 
     if [[ "$LOCAL_VER" == "Unknown" ]]; then
         gum style --foreground 196 "状态: 无法识别本地 Git 版本"
+    elif [[ "$REMOTE_VER" == "检测中..." ]]; then
+        gum style --foreground 245 "状态: 正在检测远程版本..."
     elif [[ "$LOCAL_VER" == "$REMOTE_VER" ]]; then
         gum style --foreground 212 "状态: 已是最新版本"
     else
         gum style --foreground 51 "状态: 有新版本可用"
+    fi
+    
+    # 显示脚本版本状态
+    if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
+        local script_remote=$(cat "${SCRIPT_DIR}/.script_version_cache")
+        if [[ -n "$script_remote" && "$script_remote" != "$SCRIPT_VERSION" ]]; then
+            gum style --foreground 51 "脚本更新: ${script_remote} 可用 (当前 ${SCRIPT_VERSION})"
+        fi
     fi
 }
 
@@ -434,22 +487,24 @@ select_dir_gui() {
         --prompt="目录搜索: " \
         --pointer="->" \
         --marker="✓" \
-        --color=fg:#d0d0d0,bg:#121212,hl:#5f87af \
-        --color=fg+:#ffffff,bg+:#262626,hl+:#5fd7ff \
-        --info=inline \
-        --preview 'ls -F --color=always {}' \
-        --preview-window 'right:50%:border-left')
-
-    if [[ -z "$selected_dir" ]]; then
-        return 1
-    fi
-
-    echo "$selected_dir"
-    return 0
-}
-
-main() {
+    # 启动时预加载远程版本（后台静默执行）
+    preload_remote_version
+    
+    # 启动时预加载远程版本（后台静默执行）
+    preload_remote_version
+    
+    # 标记当前在主菜单
+    local in_main_menu=true
+    
     while true; do
+        # 检查是否有版本更新且仍在主菜单
+        if [[ "$in_main_menu" == "true" && -f "${SCRIPT_DIR}/.version_updated" ]]; then
+            rm -f "${SCRIPT_DIR}/.version_updated"
+            sleep 0.5  # 短暂延迟确保数据写入完成
+        fi
+        
+        in_main_menu=true
+        
         if [[ -d "${ST_DIR}" ]]; then
             ST_DISPLAY="${GREEN}${ST_DIR}${NC}"
             IS_VALID=true
@@ -459,12 +514,15 @@ main() {
         fi
 
         clear
+        gum style --foreground 212 --bold "ST_Chatelaine v${SCRIPT_VERSION}"
+        gum style --foreground 245 "项目地址: ${SCRIPT_REPO}"
         echo "----------------------------------------"
         echo " 脚本路径: ${SCRIPT_DIR}"
         echo -e " 酒馆路径 : ${ST_DISPLAY}"
         echo "----------------------------------------"
 
         if [[ "$IS_VALID" == "false" ]]; then
+            in_main_menu=false
             echo "1. 指定酒馆路径"
             echo "2. 安装酒馆"
             echo "0. 退出"
@@ -487,6 +545,28 @@ main() {
                     read -n 1 -s -r -p "按任意键返回主菜单..."
                     ;;
                 0) exit 0 ;;
+                *) ;;
+            esac
+            continue
+        fi
+
+        check_version_status
+        echo "----------------------------------------"
+        echo "1. 启动酒馆"
+        echo "2. 酒馆版本操作 (更新/切换版本/分支)"
+        echo "3. 备份酒馆文件"
+        echo "4. 清理备份文件"
+        echo "5. 设置"
+        echo "6. 更新脚本"
+        echo "0. 退出"
+        echo "----------------------------------------"
+        read -n 1 -s -r -p "请输入: " choice
+        echo ""
+        
+        # 离开主菜单
+        in_main_menu=false 0) exit 0 ;;
+                trap - INT TERM HUP
+                
                 *) ;;
             esac
             continue
