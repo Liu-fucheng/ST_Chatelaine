@@ -60,6 +60,7 @@ load_config() {
                     backup_limit_set=true
                     ;;
                 AUTOSTART) AUTOSTART="$value" ;;
+                HIGH_PERFORMANCE) HIGH_PERFORMANCE="$value" ;;
             esac
         done < "$CONFIG_FILE"
     else
@@ -68,6 +69,7 @@ load_config() {
     
     # 设置默认值
     [[ -z "$AUTOSTART" ]] && AUTOSTART="false"
+    [[ -z "$HIGH_PERFORMANCE" ]] && HIGH_PERFORMANCE="false"
     
     # 设置默认值
     [[ -z "$ST_DIR" ]] && ST_DIR="$(dirname "${SCRIPT_DIR}")/SillyTavern"
@@ -91,6 +93,7 @@ save_config() {
 ST_DIR=$ST_DIR
 BACKUP_LIMIT=$BACKUP_LIMIT
 AUTOSTART=$AUTOSTART
+HIGH_PERFORMANCE=$HIGH_PERFORMANCE
 EOF
 }
 
@@ -179,14 +182,14 @@ backup_st() {
     for t in "${TARGETS[@]}"; do ABS_TARGETS+=("${ST_DIR}/$t"); done
     local TOTAL_SIZE=$(du -cb "${ABS_TARGETS[@]}" 2>/dev/null | tail -n1 | cut -f1)
 
-    echo "正在打包..."
+    (tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>"$ERROR_LOG") &
+    local tar_pid=$!
     
-    if tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>"$ERROR_LOG"; then
-        local EXIT_CODE=0
-    else
-        local EXIT_CODE=1
-    fi
+    gum spin --spinner dot --title "正在打包数据，请稍候..." -- sh -c "while kill -0 $tar_pid 2>/dev/null; do sleep 0.1; done"
     
+    wait $tar_pid
+    local EXIT_CODE=$?
+
     if [[ ! -f "$BACKUP_PATH" ]] || [[ ! -s "$BACKUP_PATH" ]]; then
         EXIT_CODE=1
     fi
@@ -305,7 +308,6 @@ get_remote_version() {
 
 # 获取脚本最新版本和commit
 get_script_remote_version() {
-    # 获取main分支的最新commit hash（短格式7位）
     local remote_commit=$(timeout 3s git ls-remote https://github.com/Liu-fucheng/ST_Chatelaine.git HEAD 2>/dev/null | cut -f1 | cut -c1-7)
     echo "$remote_commit"
 }
@@ -317,7 +319,7 @@ preload_remote_version() {
         REMOTE_VER=$(get_remote_version)
         if [[ -n "$REMOTE_VER" ]]; then
             echo "$REMOTE_VER" > "${SCRIPT_DIR}/.remote_version_cache"
-            # 设置刷新标志
+
             touch "${SCRIPT_DIR}/.version_updated"
         fi
         
@@ -325,7 +327,6 @@ preload_remote_version() {
         SCRIPT_REMOTE_COMMIT=$(get_script_remote_version)
         if [[ -n "$SCRIPT_REMOTE_COMMIT" ]]; then
             echo "$SCRIPT_REMOTE_COMMIT" > "${SCRIPT_DIR}/.script_version_cache"
-            # 设置刷新标志
             touch "${SCRIPT_DIR}/.version_updated"
         fi
     ) &
@@ -515,7 +516,7 @@ select_branch_interactive() {
         return 1
     fi
     
-    if ! gum spin --spinner globe --title "正在备份当前数据..." -- backup_st; then
+    if ! backup_st; then
         gum style --foreground 196 "备份失败，取消切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
@@ -943,7 +944,7 @@ main() {
         echo "2. 酒馆版本操作 (更新/切换版本/分支)"
         echo "3. 备份酒馆文件"
         echo "4. 清理备份文件"
-        echo "5. 设置"
+        echo "5. 设置菜单"
         echo "6. 更新脚本"
         if [[ "$AUTOSTART" == "true" ]]; then
             echo "7. 取消脚本自启动"
@@ -963,14 +964,45 @@ main() {
                 trap - INT TERM HUP
                 
                 gum style --foreground 212 "正在启动酒馆..."
+                if [[ "$HIGH_PERFORMANCE" == "true" ]]; then
+                    gum style --foreground 99 "高性能模式: 已启用 (8GB 内存上限)"
+                fi
                 gum style --foreground 99 "提示: 按 Ctrl+C 可返回主菜单"
                 echo ""
                 
-                bash "${ST_DIR}/start.sh"
+                if [[ "$HIGH_PERFORMANCE" == "true" ]]; then
+                    cd "${ST_DIR}" && NODE_OPTIONS="--max-old-space-size=8192" node server.js
+                    local exit_code=$?
+                else
+                    bash "${ST_DIR}/start.sh"
+                    local exit_code=$?
+                fi
                 
                 trap 'cleanup "interrupted"; exit 1' INT TERM HUP
                 
                 gum style --foreground 212 "酒馆已停止"
+                
+                # 检测内存泄漏错误码
+                if [[ $exit_code -eq 134 ]] || [[ $exit_code -eq 137 ]]; then
+                    if [[ "$HIGH_PERFORMANCE" != "true" ]]; then
+                        echo ""
+                        gum style --foreground 196 --bold "检测到内存不足错误 (退出码: $exit_code)"
+                        gum style --foreground 99 "建议启用高性能模式以分配更多内存"
+                        echo ""
+                        if gum confirm "是否立即启用高性能模式？"; then
+                            HIGH_PERFORMANCE="true"
+                            save_config
+                            gum style --foreground 212 "已启用高性能模式，下次启动将自动应用"
+                            echo ""
+                            if gum confirm "是否立即重启酒馆？"; then
+                                continue
+                            fi
+                        fi
+                    else
+                        gum style --foreground 196 "警告: 即使在高性能模式下仍遇到内存问题 (退出码: $exit_code)"
+                    fi
+                fi
+                
                 sleep 1
                 ;;
             2)
@@ -984,8 +1016,9 @@ main() {
                     echo "3. 切换酒馆分支"
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
-                    read -p "请输入: " sub_choice
-
+                    read -n 1 -s -r -p "请输入: " sub_choice
+                    echo ""
+                    
                     case $sub_choice in
                         1) 
                             if [[ "$LOCAL_VER" == "$REMOTE_VER" ]]; then
@@ -1060,7 +1093,8 @@ main() {
                     echo " 设置菜单"
                     echo "----------------------------------------"
                     echo "1. 修改酒馆路径"
-                    echo "2. 设置备份上限 (当前为: ${BACKUP_LIMIT})"
+                    echo "2. 酒馆高性能模式启动 (防止内存泄漏)"
+                    echo "3. 设置备份上限 (当前为: ${BACKUP_LIMIT})"
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
                     read -p "请输入: " setting_choice
@@ -1073,6 +1107,31 @@ main() {
                             read -n 1 -s -r -p "按任意键返回设置菜单..."
                             ;;
                         2)
+                            if [[ "$HIGH_PERFORMANCE" == "true" ]]; then
+                                gum style --foreground 99 "当前状态: 已启用高性能模式"
+                                echo ""
+                                if gum confirm "是否关闭高性能模式？"; then
+                                    HIGH_PERFORMANCE="false"
+                                    save_config
+                                    gum style --foreground 212 "已关闭高性能模式"
+                                else
+                                    gum style --foreground 99 "保持高性能模式"
+                                fi
+                            else
+                                gum style --foreground 99 "当前状态: 未启用高性能模式"
+                                gum style --foreground 245 "说明: 启用后将使用 8GB 内存上限，可防止内存泄漏"
+                                echo ""
+                                if gum confirm "是否启用高性能模式？"; then
+                                    HIGH_PERFORMANCE="true"
+                                    save_config
+                                    gum style --foreground 212 "已启用高性能模式"
+                                else
+                                    gum style --foreground 99 "保持默认模式"
+                                fi
+                            fi
+                            read -n 1 -s -r -p "按任意键返回设置菜单..."
+                            ;;
+                        3)
                             gum style --foreground 212 "当前自动备份上限: ${BACKUP_LIMIT}"
                             gum style --foreground 99 "说明: 手动备份不计入上限，不会被自动清理"
                             echo ""
