@@ -1049,31 +1049,48 @@ uninstall_script() {
     rm -f "$CONFIG_FILE"
     gum style --foreground 212 "✓ 已删除配置文件"
     
-    gum style --foreground 245 "正在删除脚本目录: ${SCRIPT_DIR}"
+    # 保存脚本目录路径
+    local target_dir="${SCRIPT_DIR}"
     
-
-    local uninstall_script="${HOME}/.uninstall_st_chatelaine.sh"
+    gum style --foreground 245 "正在删除脚本目录: ${target_dir}"
     
-    cat > "$uninstall_script" << 'UNINSTALL_EOF'
+    # 使用 HOME 目录下的临时脚本（Termux 环境下更可靠）
+    local uninstall_script="${HOME}/.uninstall_st_chatelaine_$(date +%s).sh"
+    
+    cat > "$uninstall_script" << UNINSTALL_EOF
 #!/bin/bash
 sleep 1
-if [[ -d "${1}" ]]; then
-    rm -rf "${1}"
-    echo "✓ 脚本目录已删除: ${1}"
+if [[ -d "${target_dir}" ]]; then
+    rm -rf "${target_dir}"
+    echo ""
+    echo "✓ 脚本目录已删除: ${target_dir}"
 else
-    echo "✓ 目录已不存在: ${1}"
+    echo ""
+    echo "✓ 目录已不存在: ${target_dir}"
 fi
-echo "脚本已卸载完成！"
+echo "✓ 脚本已完全卸载！"
+echo ""
 sleep 2
-rm -f "$0"
+rm -f "\$0"
 UNINSTALL_EOF
     
     chmod +x "$uninstall_script"
     
+    if [[ ! -x "$uninstall_script" ]]; then
+        gum style --foreground 196 "错误: 无法创建卸载脚本"
+        gum style --foreground 99 "正在直接删除..."
+        cd "$HOME"
+        rm -rf "${target_dir}"
+        gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
+        sleep 2
+        exit 0
+    fi
+    
     gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
     sleep 1
     
-    exec bash "$uninstall_script" "${SCRIPT_DIR}"
+    cd "$HOME"
+    exec bash "$uninstall_script"
 }
 
 install_st() {
