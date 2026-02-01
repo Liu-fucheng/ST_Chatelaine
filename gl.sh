@@ -994,8 +994,35 @@ bash \"${script_path}\""
                     gum style --foreground 99 "正在备份并注释原代码..."
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
-                    # 只注释启动相关的行（bash、sh、source、. 开头以及代码块）
-                    sed -i -E 's/^(bash |sh |source |\. |function |if |while |for |case )/# \1/' "$bashrc"
+                    # 找到系统默认内容的结束标记（bash_completion 之后）
+                    local marker_line=$(grep -n "# enable programmable completion features" "$bashrc" | tail -1 | cut -d: -f1)
+                    
+                    if [[ -n "$marker_line" ]]; then
+                        # 找到标记后的 fi 行
+                        local end_line=$(tail -n +$((marker_line)) "$bashrc" | grep -n "^fi$" | head -1 | cut -d: -f1)
+                        if [[ -n "$end_line" ]]; then
+                            end_line=$((marker_line + end_line))
+                        else
+                            end_line=$marker_line
+                        fi
+                        
+                        # 创建临时文件
+                        local temp_file=$(mktemp)
+                        
+                        # 保留前面的系统默认内容
+                        head -n $end_line "$bashrc" > "$temp_file"
+                        
+                        # 注释后面的用户添加内容
+                        tail -n +$((end_line + 1)) "$bashrc" | sed -E 's/^(bash |sh |source |\. |while |for |echo |read |case )/# \1/' >> "$temp_file"
+                        
+                        # 替换原文件
+                        mv "$temp_file" "$bashrc"
+                    else
+                        # 如果找不到标记，使用旧方法但更谨慎
+                        gum style --foreground 196 "警告: 无法识别系统默认内容边界"
+                        gum style --foreground 99 "建议选择'查看后决定'或'共存'选项"
+                        return
+                    fi
                     
                     # 添加此脚本
                     echo "" >> "$bashrc"
@@ -1003,9 +1030,9 @@ bash \"${script_path}\""
                     AUTOSTART="true"
                     save_config
                     
-                    gum style --foreground 212 "✓ 已注释原启动代码并设置此脚本为自启动"
+                    gum style --foreground 212 "✓ 已注释用户启动代码并设置此脚本为自启动"
                     gum style --foreground 245 "原配置已备份到: ${bashrc}.backup.*"
-                    gum style --foreground 245 "如需恢复原代码，请手动去除注释符号"
+                    gum style --foreground 99 "提示: 系统默认的 .bashrc 内容已保留"
                     ;;
                     
                 "共存（保留所有代码，可能冲突）")
