@@ -996,11 +996,12 @@ bash \"${script_path}\""
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
                     # 找到系统默认内容的结束标记（bash_completion 之后）
-                    local marker_line=$(grep -n "# enable programmable completion features" "$bashrc" | tail -1 | cut -d: -f1)
+                    # 匹配可能有或没有 # 的情况
+                    local marker_line=$(grep -n "enable programmable completion features" "$bashrc" | tail -1 | cut -d: -f1)
                     
                     if [[ -n "$marker_line" ]]; then
-                        # 找到标记后的 fi 行
-                        local end_line=$(tail -n +$((marker_line)) "$bashrc" | grep -n "^fi$" | head -1 | cut -d: -f1)
+                        # 找到标记后的 fi 或 #fi 行
+                        local end_line=$(tail -n +$((marker_line)) "$bashrc" | grep -n "^#\?fi$" | head -1 | cut -d: -f1)
                         if [[ -n "$end_line" ]]; then
                             end_line=$((marker_line + end_line))
                         else
