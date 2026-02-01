@@ -1039,7 +1039,20 @@ main() {
                     if [[ -n "$script_remote_commit" ]]; then
                         if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
                             gum style --foreground 99 "检测到新版本可用"
-                            gum style --foreground 99 "更新地址: ${SCRIPT_REPO}"
+                            echo ""
+                            if gum confirm "是否立即更新脚本？"; then
+                                if gum spin --spinner dot --title "正在拉取最新代码..." -- \
+                                    git -C "${SCRIPT_DIR}" pull origin main; then
+                                    gum style --foreground 212 "更新成功！"
+                                    gum style --foreground 99 "请重启脚本以应用新版本"
+                                    echo ""
+                                    if gum confirm "是否立即重启脚本？"; then
+                                        exec bash "$0"
+                                    fi
+                                else
+                                    gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
+                                fi
+                            fi
                         else
                             gum style --foreground 212 "已是最新版本"
                         fi
