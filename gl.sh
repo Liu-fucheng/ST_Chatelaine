@@ -66,6 +66,7 @@ load_config() {
                 HIGH_PERFORMANCE) HIGH_PERFORMANCE="$value" ;;
                 CUSTOM_SCRIPT_NAME) CUSTOM_SCRIPT_NAME="$value" ;;
                 CUSTOM_SCRIPT_PATH) CUSTOM_SCRIPT_PATH="$value" ;;
+                CUSTOM_SCRIPT_TYPE) CUSTOM_SCRIPT_TYPE="$value" ;;
             esac
         done < "$CONFIG_FILE"
     else
@@ -105,6 +106,7 @@ EOF
     if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
         echo "CUSTOM_SCRIPT_NAME=$CUSTOM_SCRIPT_NAME" >> "$CONFIG_FILE"
         echo "CUSTOM_SCRIPT_PATH=$CUSTOM_SCRIPT_PATH" >> "$CONFIG_FILE"
+        echo "CUSTOM_SCRIPT_TYPE=$CUSTOM_SCRIPT_TYPE" >> "$CONFIG_FILE"
     fi
 }
 
@@ -1601,7 +1603,7 @@ main() {
                     echo "----------------------------------------"
                     read -n 1 -s -r -p  "请输入: " setting_choice
                     echo ""
-                    
+
                     case $setting_choice in
                         1)
                             ST_DIR=$(select_dir_gui "${ST_DIR:-$HOME}")
@@ -1653,7 +1655,7 @@ main() {
                         4)
                             gum style --foreground 212 --bold "添加其它脚本启动方式至主菜单"
                             echo ""
-                            gum style --foreground 245 "说明: 将自定义脚本添加到主菜单，方便快速启动"
+                            gum style --foreground 245 "说明: 将自定义脚本或命令添加到主菜单，方便快速启动"
                             echo ""
                             
                             local script_name=$(gum input --placeholder "输入脚本显示名称" --prompt "名称: " --width 40)
@@ -1663,23 +1665,40 @@ main() {
                                 continue
                             fi
                             
-                            local script_path=$(gum input --placeholder "输入脚本完整路径" --prompt "路径: " --width 60)
-                            if [[ -z "$script_path" ]]; then
-                                gum style --foreground 99 "已取消添加"
-                                read -n 1 -s -r -p "按任意键返回设置菜单..."
-                                continue
-                            fi
+                            # 选择类型
+                            local script_type=$(gum choose "脚本文件 (需要bash执行)" "可执行命令 (如syncthing)" --header="选择类型")
                             
-                            # 验证路径是否存在
-                            if [[ ! -f "$script_path" ]]; then
-                                gum style --foreground 196 "错误: 脚本文件不存在"
-                                read -n 1 -s -r -p "按任意键返回设置菜单..."
-                                continue
+                            if [[ "$script_type" == "脚本文件 (需要bash执行)" ]]; then
+                                local script_path=$(gum input --placeholder "输入脚本完整路径" --prompt "路径: " --width 60)
+                                if [[ -z "$script_path" ]]; then
+                                    gum style --foreground 99 "已取消添加"
+                                    read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                    continue
+                                fi
+                                
+                                # 验证路径是否存在
+                                if [[ ! -f "$script_path" ]]; then
+                                    gum style --foreground 196 "错误: 脚本文件不存在"
+                                    read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                    continue
+                                fi
+                                
+                                CUSTOM_SCRIPT_TYPE="file"
+                            else
+                                local script_path=$(gum input --placeholder "输入命令名称 (如syncthing)" --prompt "命令: " --width 40)
+                                if [[ -z "$script_path" ]]; then
+                                    gum style --foreground 99 "已取消添加"
+                                    read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                    continue
+                                fi
+                                
+                                CUSTOM_SCRIPT_TYPE="command"
                             fi
                             
                             # 保存到配置文件
-                            echo "CUSTOM_SCRIPT_NAME=$script_name" >> "$CONFIG_FILE"
-                            echo "CUSTOM_SCRIPT_PATH=$script_path" >> "$CONFIG_FILE"
+                            CUSTOM_SCRIPT_NAME="$script_name"
+                            CUSTOM_SCRIPT_PATH="$script_path"
+                            save_config
                             
                             gum style --foreground 212 "已添加自定义脚本: $script_name"
                             gum style --foreground 99 "提示: 请重启脚本以在主菜单中看到此选项"
@@ -1692,15 +1711,23 @@ main() {
                 ;;
             7)
                 if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
-                    if [[ -f "$CUSTOM_SCRIPT_PATH" ]]; then
-                        gum style --foreground 212 "正在启动: $CUSTOM_SCRIPT_NAME"
-                        bash "$CUSTOM_SCRIPT_PATH"
-                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                    gum style --foreground 212 "正在启动: $CUSTOM_SCRIPT_NAME"
+                    echo ""
+                    
+                    if [[ "$CUSTOM_SCRIPT_TYPE" == "command" ]]; then
+                        # 直接执行命令
+                        $CUSTOM_SCRIPT_PATH
                     else
-                        gum style --foreground 196 "错误: 脚本文件不存在"
-                        gum style --foreground 99 "路径: $CUSTOM_SCRIPT_PATH"
-                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                        # 执行脚本文件
+                        if [[ -f "$CUSTOM_SCRIPT_PATH" ]]; then
+                            bash "$CUSTOM_SCRIPT_PATH"
+                        else
+                            gum style --foreground 196 "错误: 脚本文件不存在"
+                            gum style --foreground 99 "路径: $CUSTOM_SCRIPT_PATH"
+                        fi
                     fi
+                    
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
                 else
                     gum style --foreground 196 "未配置自定义脚本"
                     read -n 1 -s -r -p "按任意键返回主菜单..."
