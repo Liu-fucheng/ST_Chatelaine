@@ -921,16 +921,7 @@ bash \"${script_path}\""
                 gum style --foreground 99 "检测到备份文件"
                 if gum confirm "是否恢复之前的 .bashrc 配置？"; then
                     cp "$latest_backup" "$bashrc"
-                    if grep -q "^# " "$bashrc" 2>/dev/null; then
-                        if gum confirm "检测到备份中有注释代码，是否取消注释？"; then
-                            sed -i 's/^# \(.*\)$/\1/' "$bashrc"
-                            gum style --foreground 212 "已恢复并取消注释"
-                        else
-                            gum style --foreground 212 "已恢复备份（保留注释）"
-                        fi
-                    else
-                        gum style --foreground 212 "已恢复之前的配置"
-                    fi
+                    gum style --foreground 212 "已恢复之前的配置"
                 fi
             fi
             
@@ -1003,7 +994,8 @@ bash \"${script_path}\""
                         # 找到标记后的 fi 或 #fi 行（允许前后有空格）
                         local end_line=$(tail -n +$((marker_line)) "$bashrc" | grep -n "^[ \t]*#\?fi[ \t]*$" | head -1 | cut -d: -f1)
                         if [[ -n "$end_line" ]]; then
-                            end_line=$((marker_line + end_line))
+                            # tail -n +N 的第 M 行对应原文件的 N+M-1 行
+                            end_line=$((marker_line + end_line - 1))
                         else
                             end_line=$marker_line
                         fi
