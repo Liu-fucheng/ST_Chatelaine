@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 终端标题
-printf "ST_Chatelaine"
+# 设置终端标题
+printf "\033]0;ST Chatelaine\007"
 
 # 脚本信息
 SCRIPT_DIR_INIT="$(cd "$(dirname "$0")" && pwd)"
@@ -925,6 +925,10 @@ bash \"${script_path}\""
                 fi
             fi
             
+            # 清理所有备份文件
+            rm -f "${bashrc}.backup."* 2>/dev/null
+            gum style --foreground 99 "已清理备份文件"
+            
             AUTOSTART="false"
             save_config
             gum style --foreground 212 "已取消自启动设置"
@@ -971,6 +975,8 @@ bash \"${script_path}\""
                     fi
                     
                     gum style --foreground 99 "正在备份原 .bashrc..."
+                    # 删除旧备份，只保留最新的一个
+                    rm -f "${bashrc}.backup."* 2>/dev/null
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
                     # 清空并添加此脚本
@@ -979,11 +985,13 @@ bash \"${script_path}\""
                     save_config
                     
                     gum style --foreground 212 "✓ 已清空 .bashrc 并设置此脚本为自启动"
-                    gum style --foreground 245 "原配置已备份到: ${bashrc}.backup.*"
+                    gum style --foreground 99 "原配置已备份（仅保留最新一个）"
                     ;;
                     
                 "注释（保留原代码但注释掉）")
                     gum style --foreground 99 "正在备份并注释原代码..."
+                    # 删除旧备份，只保留最新的一个
+                    rm -f "${bashrc}.backup."* 2>/dev/null
                     cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
                     
                     # 找到系统默认内容的结束标记（bash_completion 之后）
@@ -1033,7 +1041,7 @@ bash \"${script_path}\""
                     save_config
                     
                     gum style --foreground 212 "✓ 已注释用户启动代码并设置此脚本为自启动"
-                    gum style --foreground 245 "原配置已备份到: ${bashrc}.backup.*"
+                    gum style --foreground 99 "原配置已备份（仅保留最新一个）"
                     gum style --foreground 99 "提示: 系统默认的 .bashrc 内容已保留"
                     ;;
                     
@@ -1135,7 +1143,7 @@ UNINSTALL_EOF
     
     chmod +x "$uninstall_script"
     
-    gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
+    gum style --foreground 212 "卸载完成！感谢使用 ST Chatelaine"
     sleep 1
     
     exec bash "$uninstall_script" "${SCRIPT_DIR}"
@@ -1220,7 +1228,7 @@ main() {
         gum style \
             --foreground 212 --border-foreground 212 --border double \
             --align center --width 60 --padding "1 2" \
-            "欢迎使用 ST_Chatelaine" "" "首次运行配置"
+            "欢迎使用 ST Chatelaine" "" "首次运行配置"
         
         echo ""
         echo ""
@@ -1306,7 +1314,7 @@ main() {
         fi
 
         clear
-        gum style --foreground 212 --bold "ST_Chatelaine $(get_script_version)"
+        gum style --foreground 212 --bold "ST Chatelaine $(get_script_version)"
         gum style --foreground 245 "作者: 柳拂城"
         gum style --foreground 245 "GitHub地址: ${SCRIPT_REPO}"
         echo "----------------------------------------"
