@@ -1,0 +1,649 @@
+#!/bin/bash
+
+# 颜色
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# 临时文件追踪数组
+declare -a TEMP_FILES=()
+
+# 清理函数
+cleanup() {
+    echo -ne "\033[?25h"
+    
+    for temp_file in "${TEMP_FILES[@]}"; do
+        [[ -f "$temp_file" ]] && rm -f "$temp_file"
+    done
+    
+    if [[ -n "$1" ]]; then
+        echo -e "\n${YELLOW}操作已取消，返回主菜单...${NC}"
+        sleep 1
+    fi
+}
+
+trap 'cleanup "interrupted"; exit 1' INT TERM HUP
+
+# 目录
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+ST_DIR="$(dirname "${SCRIPT_DIR}")/SillyTavern"
+
+# 配置文件
+CONFIG_FILE="${SCRIPT_DIR}/config.txt"
+
+# 读取配置函数
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        while IFS='=' read -r key value; do
+            case "$key" in
+                ST_DIR) ST_DIR="$value" ;;
+                BACKUP_LIMIT) BACKUP_LIMIT="$value" ;;
+            esac
+        done < "$CONFIG_FILE"
+    fi
+    
+    # 设置默认值
+    [[ -z "$ST_DIR" ]] && ST_DIR="$(dirname "${SCRIPT_DIR}")/SillyTavern"
+    [[ -z "$BACKUP_LIMIT" ]] && BACKUP_LIMIT=2
+    
+    # 验证备份上限
+    if ! [[ "$BACKUP_LIMIT" =~ ^[0-9]+$ ]] || [[ $BACKUP_LIMIT -lt 1 ]]; then
+        BACKUP_LIMIT=2
+    fi
+}
+
+# 保存配置函数
+save_config() {
+    cat > "$CONFIG_FILE" << EOF
+ST_DIR=$ST_DIR
+BACKUP_LIMIT=$BACKUP_LIMIT
+EOF
+}
+
+# 加载配置
+load_config
+
+#版本号
+LOCAL_VER="--"
+REMOTE_VER="--"
+
+# 自动检测并安装 pv
+if ! command -v pv &> /dev/null; then
+    echo "检测到未安装 pv，正在自动安装..."
+    pkg install pv -y
+fi
+
+# 自动检测并安装 gum
+if ! command -v gum &> /dev/null; then
+    echo "检测到未安装 gum，正在自动安装..."
+    pkg install gum -y
+fi
+
+# 32 位 Android 系统安装 esbuild
+if [[ "$(uname -o)" == "Android" && "$(uname -m)" == "armv7l" ]]; then
+    if ! command -v esbuild &> /dev/null; then
+        echo -e "${YELLOW}检测到 32 位 Android 系统，未安装 esbuild，正在安装...${NC}"
+        pkg install esbuild -y
+    fi
+fi
+
+# 备份
+# 参数: $1 = "manual" 表示手动备份，"auto" 或空表示自动备份
+backup_st() {
+    local backup_type="${1:-auto}"
+    local backup_dir="${SCRIPT_DIR}/backups"
+    mkdir -p "$backup_dir"
+    
+    # 如果是自动备份，检查1小时内是否已有备份
+    if [[ "$backup_type" == "auto" ]]; then
+        local one_hour_ago=$(date -d "1 hour ago" +%s 2>/dev/null || date -v-1H +%s 2>/dev/null)
+        local recent_backup=""
+        
+        for backup_file in "${backup_dir}"/ST_Backup_*.tar.gz; do
+            [[ -f "$backup_file" ]] || continue
+            # 跳过手动备份
+            [[ "$backup_file" == *"_manual.tar.gz" ]] && continue
+            
+            local file_time=$(stat -c %Y "$backup_file" 2>/dev/null || stat -f %m "$backup_file" 2>/dev/null)
+            if [[ $file_time -gt $one_hour_ago ]]; then
+                recent_backup="$backup_file"
+                break
+            fi
+        done
+        
+        if [[ -n "$recent_backup" ]]; then
+            local backup_age=$(( ($(date +%s) - $(stat -c %Y "$recent_backup" 2>/dev/null || stat -f %m "$recent_backup" 2>/dev/null)) / 60 ))
+            gum style --foreground 214 "检测到 ${backup_age} 分钟前已创建备份："
+            gum style --foreground 245 "  $(basename "$recent_backup")"
+            if ! gum confirm "是否仍要继续备份？"; then
+                gum style --foreground 51 "已取消备份"
+                return 0
+            fi
+        fi
+            if ! gum confirm "是否继续备份？"; then
+                return 0
+            fi
+        fi
+    fi
+    
+    # 生成备份文件名
+    if [[ "$backup_type" == "manual" ]]; then
+        BACKUP_NAME="ST_Backup_$(date +%Y%m%d_%H%M%S)_manual.tar.gz"
+    else
+        BACKUP_NAME="ST_Backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+    fi
+    BACKUP_PATH="${backup_dir}/${BACKUP_NAME}"
+
+    TARGETS=()
+    [[ -f "${ST_DIR}/config.yaml" ]] && TARGETS+=("config.yaml")
+    [[ -d "${ST_DIR}/data" ]] && TARGETS+=("data")
+    [[ -d "${ST_DIR}/public/scripts/extensions/third-party" ]] && TARGETS+=("public/scripts/extensions/third-party")
+    if [ ${#TARGETS[@]} -eq 0 ]; then
+        gum style --foreground 196 --border double --padding "0 2" "错误：指定酒馆路径下未找到可备份的文件或目录。"
+        return 1
+    fi
+
+    echo "正在检查文件大小..."
+    local ERROR_LOG=$(mktemp)
+    TEMP_FILES+=("$ERROR_LOG")
+
+    local ABS_TARGETS=()
+    for t in "${TARGETS[@]}"; do ABS_TARGETS+=("${ST_DIR}/$t"); done
+    local TOTAL_SIZE=$(du -cb "${ABS_TARGETS[@]}" 2>/dev/null | tail -n1 | cut -f1)
+
+    echo "正在打包..."
+    
+    gum spin --spinner globe --title "正在打包数据，请稍候..." --show-output -- \
+        tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>/dev/null
+
+    local EXIT_CODE=0
+    if [[ -s "$ERROR_LOG" ]]; then EXIT_CODE=1; fi
+    if [[ ! -s "$BACKUP_PATH" ]]; then EXIT_CODE=1; fi
+
+    if [ $? -eq 0 ]; then
+        local size=$(du -h "$BACKUP_PATH" | cut -f1)
+        gum style \
+            --foreground 212 --border-foreground 212 --border double \
+            --align center --width 50 --margin "1 0" --padding "1 2" \
+            "备份成功！" "" "文件: $(basename "$BACKUP_PATH")" "大小: $size"
+        
+        # 仅对自动备份执行清理
+        if [[ "$backup_type" == "auto" ]]; then
+            cleanup_old_backups
+        fi
+        
+        return 0
+    else
+        gum style --foreground 196 --bold "备份失败，请检查磁盘空间或权限。"
+        return 1
+    fi
+}
+
+# 清理旧的自动备份（不删除手动备份）
+cleanup_old_backups() {
+    local backup_dir="${SCRIPT_DIR}/backups"
+    [[ ! -d "$backup_dir" ]] && return
+    
+    # 获取所有自动备份（不含 _manual 的）
+    local auto_backups=()
+    for backup_file in "${backup_dir}"/ST_Backup_*.tar.gz; do
+        [[ -f "$backup_file" ]] || continue
+        # 跳过手动备份
+        [[ "$backup_file" == *"_manual.tar.gz" ]] && continue
+        auto_backups+=("$backup_file")
+    done
+    
+    # 按时间排序（最新的在前）
+    IFS=$'\n' auto_backups=($(ls -t "${auto_backups[@]}" 2>/dev/null))
+    unset IFS
+    
+    local total=${#auto_backups[@]}
+    
+    # 如果超过上限，删除旧的
+    if [[ $total -gt $BACKUP_LIMIT ]]; then
+        local to_delete=$((total - BACKUP_LIMIT))
+        gum style --foreground 214 "自动备份数量 ($total) 超过上限 ($BACKUP_LIMIT)，正在清理..."
+        
+        for ((i=BACKUP_LIMIT; i<total; i++)); do
+            local old_backup="${auto_backups[$i]}"
+            gum style --foreground 245 "删除旧备份: $(basename "$old_backup")"
+            rm -f "$old_backup"
+        done
+        
+        gum style --foreground 212 "已清理 $to_delete 个旧备份"
+    fi
+}
+
+
+# 解压
+restore_st() {
+    local backup_file=$1 
+
+    echo "正在解压备份..."
+    tar -xzf "$backup_file" -C "$ST_DIR"
+    
+    echo "备份还原完成。"
+}
+
+# 解压最新备份
+restore_latest() {
+    local backup_dir="${SCRIPT_DIR}/backups"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        gum style --foreground 196 "错误: 备份目录不存在"
+        return 1
+    fi
+
+    local latest_file=$(ls -t "${backup_dir}/"*.tar.gz 2>/dev/null | head -n 1)
+
+    if [[ -z "$latest_file" ]]; then
+        gum style --foreground 196 "未找到任何备份文件"
+        return 1
+    fi
+
+    gum style --foreground 212 "找到最新备份: $(basename "$latest_file")"
+    
+    local total_limit=5
+
+    local dir1="${ST_DIR}/data"
+    local count1=0
+    if [[ -d "$dir1" ]]; then
+        count1=$(find "$dir1" -type f 2>/dev/null | wc -l)
+    fi
+
+    local dir2="${ST_DIR}/public/scripts/extensions/third-party"
+    local count2=0
+    if [[ -d "$dir2" ]]; then
+        count2=$(find "$dir2" -type f 2>/dev/null | wc -l)
+    fi
+
+    local total_count=$((count1 + count2))
+
+    if [[ "$total_count" -lt "$total_limit" ]]; then
+        gum style --foreground 51 "检测到关键文件缺失，正在自动还原..."
+        gum spin --spinner dot --title "还原备份中..." -- restore_st "$latest_file"
+    else
+        gum style --foreground 212 "检测到数据完整，跳过自动还原"
+    fi
+}
+
+# 获取最新版本号
+get_remote_version() {
+    # 5 秒超时
+    local remote_tag=$(timeout 5s git ls-remote --tags --sort='v:refname' https://github.com/SillyTavern/SillyTavern.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
+    
+    if [[ -z "$remote_tag" ]]; then
+        echo "检测失败(超时)"
+    else
+        echo "$remote_tag"
+    fi
+}
+
+# 获取本地当前版本号
+get_local_version() {
+    if [[ -d "${ST_DIR}/.git" ]]; then
+        git -C "$ST_DIR" describe --tags --abbrev=0 2>/dev/null || echo "Unknown"
+    else
+        echo "未检测到 Git"
+    fi
+}
+
+# 比对版本号
+check_version_status() {
+    LOCAL_VER=$(get_local_version)
+    REMOTE_VER=$(get_remote_version)
+
+    gum style --foreground 214 "本地版本: ${LOCAL_VER}"
+    gum style --foreground 214 "远程最新: ${REMOTE_VER}"
+
+    if [[ "$LOCAL_VER" == "Unknown" ]]; then
+        gum style --foreground 196 "状态: 无法识别本地 Git 版本"
+    elif [[ "$LOCAL_VER" == "$REMOTE_VER" ]]; then
+        gum style --foreground 212 "状态: 已是最新版本"
+    else
+        gum style --foreground 51 "状态: 有新版本可用"
+    fi
+}
+
+update_st() {
+    gum style --foreground 212 --bold "开始更新 SillyTavern"
+    echo ""
+
+    if [[ ! -d "${ST_DIR}/.git" ]]; then
+        gum style --foreground 196 "错误: 目标目录不是 Git 仓库，无法更新"
+        return 1
+    fi
+
+    git -C "$ST_DIR" config core.filemode false
+
+    local CURRENT_BRANCH=$(git -C "$ST_DIR" branch --show-current)
+
+    if [[ -z "$CURRENT_BRANCH" ]]; then
+        gum style --foreground 214 "检测到当前处于特定版本锁定状态"
+        gum style --foreground 51 "正在切换回 release 分支..."
+        
+        if ! gum spin --spinner dot --title "切换分支中..." -- \
+            git -C "$ST_DIR" checkout -f release; then
+            gum style --foreground 196 "切换分支失败"
+            return 1
+        fi
+        
+        CURRENT_BRANCH="release"
+    fi
+
+    if ! gum spin --spinner dot --title "正在拉取远程分支..." -- \
+        git -C "$ST_DIR" fetch origin "$CURRENT_BRANCH"; then
+        gum style --foreground 196 "错误: 拉取远程分支失败，请检查网络连接"
+        return 1
+    fi
+
+    git -C "$ST_DIR" reset --hard "origin/$CURRENT_BRANCH"
+
+    if gum spin --spinner dot --title "正在从 GitHub 拉取最新代码..." -- \
+        git -C "$ST_DIR" pull; then
+        gum style --foreground 212 "代码更新成功"
+
+        if [[ -f "${ST_DIR}/package.json" ]]; then
+            if gum spin --spinner dot --title "正在安装 npm 依赖..." -- \
+                sh -c "cd '$ST_DIR' && npm install --no-audit --fund=false 2>&1"; then
+                gum style --foreground 212 "依赖安装完成"
+            else
+                gum style --foreground 214 "警告: 依赖安装可能遇到问题，请手动检查"
+            fi
+        fi
+
+        gum style \
+            --foreground 212 --border-foreground 212 --border double \
+            --align center --width 50 --padding "1 2" \
+            "更新完成"
+        return 0
+    else
+        gum style --foreground 196 "更新失败，请检查网络连接或手动处理冲突"
+        return 1
+    fi
+}
+
+select_tag_interactive() {
+    gum style --foreground 212 --bold "版本选择器"
+    gum style --foreground 245 "提示: 输入可搜索，方向键选择，回车确认，Esc退出"
+    echo ""
+    
+    # 使用 gum filter 进行版本选择，带时间戳显示
+    local selected_tag=$(gum spin --spinner dot --title "正在加载版本列表..." -- \
+        git -C "$ST_DIR" tag --sort=-creatordate --format='%(creatordate:short) | %(refname:short)' | \
+        gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本" | \
+        awk '{print $NF}')
+    
+    # 用户取消选择
+    if [[ -z "$selected_tag" ]]; then
+        gum style --foreground 214 "已取消版本切换"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    gum style --foreground 212 "已选择版本: ${selected_tag}"
+    echo ""
+    
+    # 备份确认
+    if ! gum confirm "是否备份当前数据后切换版本？"; then
+        gum style --foreground 214 "已取消切换"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    # 执行备份
+    if ! gum spin --spinner globe --title "正在备份当前数据..." -- backup_st; then
+        gum style --foreground 196 "备份失败，取消切换"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
+    # 切换版本
+    if gum spin --spinner dot --title "正在切换到版本 ${selected_tag}..." -- \
+        git -C "$ST_DIR" checkout -f "$selected_tag"; then
+        gum style \
+            --foreground 212 --border-foreground 212 --border double \
+            --align center --width 50 --padding "1 2" \
+            "版本切换成功" "" "当前版本: ${selected_tag}"
+    else
+        gum style --foreground 196 --bold "切换失败，请检查版本号或仓库状态"
+    fi
+    
+    restore_latest
+    read -n 1 -s -r -p "按任意键返回主菜单..."
+    return 0
+}
+
+# 目录选择函数
+select_dir_gui() {
+    if ! command -v fzf &> /dev/null; then
+        echo "正在安装 fzf..."
+        pkg install fzf -y
+    fi
+
+    local selected_dir
+    selected_dir=$(find "$HOME" -type d -maxdepth 4 2>/dev/null | fzf \
+        --query "SillyTavern$" \
+        --select-1 \
+        --exit-0 \
+        --height 60% \
+        --layout=reverse \
+        --border \
+        --prompt="目录搜索: " \
+        --pointer="->" \
+        --marker="✓" \
+        --color=fg:#d0d0d0,bg:#121212,hl:#5f87af \
+        --color=fg+:#ffffff,bg+:#262626,hl+:#5fd7ff \
+        --info=inline \
+        --preview 'ls -F --color=always {}' \
+        --preview-window 'right:50%:border-left')
+
+    if [[ -z "$selected_dir" ]]; then
+        return 1
+    fi
+
+    echo "$selected_dir"
+    return 0
+}
+
+main() {
+    while true; do
+        if [[ -d "${ST_DIR}" ]]; then
+            ST_DISPLAY="${GREEN}${ST_DIR}${NC}"
+            IS_VALID=true
+        else
+            ST_DISPLAY="${RED}未指定${NC}"
+            IS_VALID=false
+        fi
+
+        clear
+        echo "----------------------------------------"
+        echo " 脚本路径: ${SCRIPT_DIR}"
+        echo -e " 酒馆路径 : ${ST_DISPLAY}"
+        echo "----------------------------------------"
+
+        if [[ "$IS_VALID" == "false" ]]; then
+            echo "1. 指定酒馆路径"
+            echo "2. 安装酒馆"
+            echo "0. 退出"
+            echo "----------------------------------------"
+            read -n 1 -s -r -p "请输入: " choice
+            echo ""
+            
+            case $choice in
+                1) 
+                    ST_DIR=$(select_dir_gui "${ST_DIR:-$HOME}")
+                    save_config
+                    echo "已指定酒馆路径为: $ST_DIR"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    ;;
+                2) 
+                    echo "正在安装酒馆..."
+                    pkg update && pkg upgrade
+                    pkg install git nodejs-lts nano
+                    git clone https://github.com/SillyTavern/SillyTavern -b release $(dirname "${SCRIPT_DIR}")
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    ;;
+                0) exit 0 ;;
+                *) ;;
+            esac
+            continue
+        fi
+
+        check_version_status
+        echo "----------------------------------------"
+        echo "1. 启动酒馆"
+        echo "2. 酒馆版本操作 (更新/切换版本/分支)"
+        echo "3. 备份酒馆文件"
+        echo "4. 清理备份文件"
+        echo "5. 设置"
+        echo "6. 更新脚本"
+        echo "0. 退出"
+        echo "----------------------------------------"
+        read -n 1 -s -r -p "请输入: " choice
+        echo ""
+
+        case $choice in
+            1)
+                gum style --foreground 51 "正在启动酒馆..."
+                gum style --foreground 214 "提示: 按 Ctrl+C 可返回主菜单"
+                echo ""
+                
+                bash "${ST_DIR}/start.sh"
+                
+                trap 'cleanup "interrupted"; exit 1' INT TERM HUP
+                
+                gum style --foreground 212 "酒馆已停止"
+                sleep 1
+                ;;
+            2)
+                 while true; do
+                    clear
+                    echo "----------------------------------------"
+                    echo " 酒馆版本操作菜单"
+                    echo "----------------------------------------"
+                    echo "1. 更新酒馆至最新版本 (Release)"
+                    echo "2. 切换酒馆至指定版本"
+                    echo "3. 切换酒馆分支"
+                    echo "0. 返回主菜单"
+                    echo "----------------------------------------"
+                    read -p "请输入: " sub_choice
+
+                    case $sub_choice in
+                        1) 
+                            if [[ "$LOCAL_VER" == "$REMOTE_VER" ]]; then
+                                gum style --foreground 212 "正在检查版本信息..."
+
+                                local CURRENT_BRANCH=$(git -C "$ST_DIR" branch --show-current)
+
+                                if ! gum spin --spinner dot --title "拉取远程分支中..." -- \
+                                    git -C "$ST_DIR" fetch origin "$CURRENT_BRANCH"; then
+                                    gum style --foreground 196 "错误: 拉取远程分支失败，请检查网络连接"
+                                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                                    continue
+                                fi
+
+                                local LOCAL_HASH=$(git -C "$ST_DIR" rev-parse --short HEAD)
+                                local REMOTE_HASH=$(git -C "$ST_DIR" rev-parse --short "origin/$CURRENT_BRANCH")
+
+                                if [[ "$LOCAL_HASH" == "$REMOTE_HASH" ]]; then
+                                    gum style --foreground 212 "当前SillyTavern已是最新版本，无需更新"
+                                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                                    continue
+                                fi
+                            fi
+                            
+                            if ! gum confirm "是否备份当前数据后更新？"; then
+                                gum style --foreground 214 "已取消更新"
+                                read -n 1 -s -r -p "按任意键返回主菜单..."
+                                continue
+                            fi
+                            
+                            if backup_st; then
+                                gum style --foreground 212 "备份成功，开始更新..."
+                            else
+                                gum style --foreground 196 "备份失败，取消更新"
+                                read -n 1 -s -r -p "按任意键返回主菜单..."
+                                continue
+                            fi
+                            update_st
+                            restore_latest
+                            gum style --foreground 212 "更新完成"
+                            read -n 1 -s -r -p "按任意键返回主菜单..."
+                            break
+                            ;;
+                        2)
+                            select_tag_interactive
+                            ;;
+                        3)
+                            ;;
+                        0) break ;;
+                        *) echo "无效选项" ; sleep 1 ;;
+                    esac
+                done
+                ;;
+            3)
+                gum style --foreground 51 "开始手动备份..."
+                if backup_st "manual"; then
+                    gum style --foreground 212 "备份成功"
+                else
+                    gum style --foreground 196 "备份失败"
+                fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            5)
+                while true; do
+                    clear
+                    echo "----------------------------------------"
+                    echo " 设置菜单"
+                    echo "----------------------------------------"
+                    echo "1. 修改酒馆路径"
+                    echo "2. 设置备份上限 (当前为: ${GREEN}${BACKUP_LIMIT}${NC})"
+                    echo "0. 返回主菜单"
+                    echo "----------------------------------------"
+                    read -p "请输入: " setting_choice
+
+                    case $setting_choice in
+                        1)
+                            ST_DIR=$(select_dir_gui "${ST_DIR:-$HOME}")
+                            save_config
+                            echo "已指定酒馆路径为: $ST_DIR"
+                            read -n 1 -s -r -p "按任意键返回设置菜单..."
+                            ;;
+                        2)
+                            gum style --foreground 212 "当前自动备份上限: ${BACKUP_LIMIT}"
+                            gum style --foreground 214 "说明: 手动备份不计入上限，不会被自动清理"
+                            echo ""
+                            
+                            new_limit=$(gum input --placeholder "输入 1-99" --prompt "备份上限: " --width 20 --value "$BACKUP_LIMIT")
+                            
+                            if [[ "$new_limit" =~ ^[0-9]+$ ]] && [[ $new_limit -ge 1 ]] && [[ $new_limit -le 99 ]]; then
+                                BACKUP_LIMIT=$new_limit
+                                save_config
+                                gum style --foreground 212 "备份上限已设置为: $BACKUP_LIMIT"
+                            else
+                                gum style --foreground 196 "无效输入，请输入 1-99 之间的数字"
+                            fi
+                            read -n 1 -s -r -p "按任意键返回设置菜单..."
+                            ;;
+                        0) break ;;
+                        *) echo "无效选项" ; sleep 1 ;;
+                    esac
+                done
+                ;;
+            0) 
+                cleanup
+                exit 0 
+                ;;
+            *) echo "无效选项" ; sleep 1 ;;
+        esac
+    done
+}
+
+# 启动主程序
+main
+
+# 脚本正常结束时清理
+cleanup
