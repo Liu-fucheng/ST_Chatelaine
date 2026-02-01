@@ -181,21 +181,23 @@ backup_st() {
 
     echo "正在打包..."
     
-    gum spin --spinner globe --title "正在打包数据，请稍候..." --show-output -- \
-        tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>/dev/null
+    if tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>"$ERROR_LOG"; then
+        local EXIT_CODE=0
+    else
+        local EXIT_CODE=1
+    fi
+    
+    if [[ ! -f "$BACKUP_PATH" ]] || [[ ! -s "$BACKUP_PATH" ]]; then
+        EXIT_CODE=1
+    fi
 
-    local EXIT_CODE=0
-    if [[ -s "$ERROR_LOG" ]]; then EXIT_CODE=1; fi
-    if [[ ! -s "$BACKUP_PATH" ]]; then EXIT_CODE=1; fi
-
-    if [ $? -eq 0 ]; then
+    if [ $EXIT_CODE -eq 0 ]; then
         local size=$(du -h "$BACKUP_PATH" | cut -f1)
         gum style \
             --foreground 212 --border-foreground 212 --border double \
             --align center --width 50 --margin "1 0" --padding "1 2" \
             "备份成功！" "" "文件: $(basename "$BACKUP_PATH")" "大小: $size"
         
-        # 仅对自动备份执行清理
         if [[ "$backup_type" == "auto" ]]; then
             cleanup_old_backups
         fi
@@ -467,7 +469,8 @@ select_tag_interactive() {
         return 1
     fi
     
-    if ! gum spin --spinner globe --title "正在备份当前数据..." -- backup_st; then
+    # 执行备份
+    if ! backup_st; then
         gum style --foreground 196 "备份失败，取消切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
