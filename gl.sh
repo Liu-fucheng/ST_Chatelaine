@@ -50,11 +50,15 @@ load_config() {
                     BACKUP_LIMIT="$value"
                     backup_limit_set=true
                     ;;
+                AUTOSTART) AUTOSTART="$value" ;;
             esac
         done < "$CONFIG_FILE"
     else
         first_run=true
     fi
+    
+    # 设置默认值
+    [[ -z "$AUTOSTART" ]] && AUTOSTART="false"
     
     # 设置默认值
     [[ -z "$ST_DIR" ]] && ST_DIR="$(dirname "${SCRIPT_DIR}")/SillyTavern"
@@ -77,6 +81,7 @@ save_config() {
     cat > "$CONFIG_FILE" << EOF
 ST_DIR=$ST_DIR
 BACKUP_LIMIT=$BACKUP_LIMIT
+AUTOSTART=$AUTOSTART
 EOF
 }
 
@@ -348,8 +353,8 @@ check_version_status() {
         REMOTE_VER="检测中..."
     fi
 
-    gum style --foreground 214 "本地版本: ${LOCAL_VER}"
-    gum style --foreground 214 "远程最新: ${REMOTE_VER}"
+    gum style --foreground 255 "本地版本: ${LOCAL_VER}"
+    gum style --foreground 255 "远程最新: ${REMOTE_VER}"
 
     if [[ "$LOCAL_VER" == "Unknown" ]]; then
         gum style --foreground 196 "状态: 无法识别本地 Git 版本"
@@ -429,7 +434,7 @@ update_st() {
 }
 
 select_tag_interactive() {
-    gum style --foreground 212 --bold "版本选择器"
+    gum style --foreground 212 --bold "版本选择"
     gum style --foreground 245 "提示: 输入可搜索，方向键选择，回车确认，Esc退出"
     echo ""
     
@@ -479,6 +484,224 @@ select_tag_interactive() {
     return 0
 }
 
+set_autostart() {
+    local bashrc="${HOME}/.bashrc"
+    local script_path="${SCRIPT_DIR}/$(basename "$0")"
+    local autostart_line="# ST_Chatelaine Auto-start
+bash \"${script_path}\""
+    
+    if grep -q "ST_Chatelaine Auto-start" "$bashrc" 2>/dev/null; then
+        gum style --foreground 214 "当前状态: 已启用自启动"
+        echo ""
+        if gum confirm "是否取消自启动？"; then
+            sed -i '/# ST_Chatelaine Auto-start/,+1d' "$bashrc"
+            AUTOSTART="false"
+            save_config
+            gum style --foreground 212 "已取消自启动设置"
+        else
+            gum style --foreground 51 "保持自启动设置"
+        fi
+    else
+        gum style --foreground 214 "当前状态: 未启用自启动"
+        echo ""
+        
+        # 检测是否有其他启动代码（包括简单命令和复杂脚本块）
+        local has_startup_code=false
+        local startup_info=""
+        
+        # 检测单行启动命令
+        local single_line_count=$(grep -cE "^(bash|sh|source|\.)" "$bashrc" 2>/dev/null || echo "0")
+        
+        # 检测可能的脚本块（function、if、while、for等关键字）
+        local script_block_count=$(grep -cE "^(function|if |while |for |case )" "$bashrc" 2>/dev/null || echo "0")
+        
+        if [[ $single_line_count -gt 0 ]] || [[ $script_block_count -gt 0 ]]; then
+            has_startup_code=true
+            startup_info="检测到:\n"
+            [[ $single_line_count -gt 0 ]] && startup_info+="  - ${single_line_count} 行启动命令\n"
+            [[ $script_block_count -gt 0 ]] && startup_info+="  - ${script_block_count} 个代码块（可能是内联脚本）"
+        fi
+        
+        if [[ "$has_startup_code" == "true" ]]; then
+            gum style --foreground 214 --bold "⚠ 检测到 .bashrc 中已有启动代码："
+            echo -e "$startup_info"
+            echo ""
+            
+            gum style --foreground 51 "请选择处理方式："
+            local choice=$(gum choose \
+                "替换（清空 .bashrc 后仅添加此脚本）" \
+                "注释（保留原代码但注释掉）" \
+                "共存（保留所有代码，可能冲突）" \
+                "查看后决定" \
+                "取消设置")
+            
+            case "$choice" in
+                "替换（清空 .bashrc 后仅添加此脚本）")
+                    gum style --foreground 196 --bold "警告: 此操作将清空整个 .bashrc！"
+                    if ! gum confirm "确认要清空并替换 .bashrc 吗？"; then
+                        gum style --foreground 51 "已取消操作"
+                        return
+                    fi
+                    
+                    gum style --foreground 214 "正在备份原 .bashrc..."
+                    cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
+                    
+                    # 清空并添加此脚本
+                    echo "$autostart_line" > "$bashrc"
+                    AUTOSTART="true"
+                    save_config
+                    
+                    gum style --foreground 212 "✓ 已清空 .bashrc 并设置此脚本为自启动"
+                    gum style --foreground 245 "原配置已备份到: ${bashrc}.backup.*"
+                    ;;
+                    
+                "注释（保留原代码但注释掉）")
+                    gum style --foreground 214 "正在备份并注释原代码..."
+                    cp "$bashrc" "${bashrc}.backup.$(date +%Y%m%d_%H%M%S)"
+                    
+                    # 给所有非注释行添加 # 注释
+                    sed -i 's/^[^#].*$/# &/' "$bashrc"
+                    
+                    # 添加此脚本
+                    echo "" >> "$bashrc"
+                    echo "$autostart_line" >> "$bashrc"
+                    AUTOSTART="true"
+                    save_config
+                    
+                    gum style --foreground 212 "✓ 已注释原代码并设置此脚本为自启动"
+                    gum style --foreground 245 "原配置已备份到: ${bashrc}.backup.*"
+                    gum style --foreground 245 "如需恢复原代码，请手动去除注释符号"
+                    ;;
+                    
+                "共存（保留所有代码，可能冲突）")
+                    echo "" >> "$bashrc"
+                    echo "$autostart_line" >> "$bashrc"
+                    AUTOSTART="true"
+                    save_config
+                    gum style --foreground 212 "✓ 已设置为自启动（与现有代码共存）"
+                    gum style --foreground 214 "注意: 多个启动脚本可能产生冲突"
+                    ;;
+                    
+                "查看后决定")
+                    gum style --foreground 51 "正在显示 .bashrc 内容..."
+                    echo ""
+                    cat -n "$bashrc"
+                    echo ""
+                    gum style --foreground 245 "查看完毕，请重新执行此选项进行设置"
+                    ;;
+                    
+                "取消设置")
+                    gum style --foreground 51 "已取消设置"
+                    return
+                    ;;
+            esac
+        else
+            if gum confirm "是否设置为默认自启动？"; then
+                # 添加到 .bashrc
+                echo "" >> "$bashrc"
+                echo "$autostart_line" >> "$bashrc"
+                AUTOSTART="true"
+                save_config
+                gum style --foreground 212 "已设置为自启动！"
+                gum style --foreground 245 "下次打开 Termux 将自动运行此脚本"
+            else
+                gum style --foreground 51 "已取消设置"
+            fi
+        fi
+    fi
+}
+
+# 卸载脚本
+uninstall_script() {
+    clear
+    gum style --foreground 196 --bold "卸载脚本"
+    gum style --foreground 214 "此操作将删除："
+    echo "  1. 脚本文件及目录"
+    echo "  2. 配置文件 (config.txt)"
+    echo "  3. 自启动设置 (如果已设置)"
+    echo "  4. 版本缓存文件"
+    gum style --foreground 245 "注意: 不会删除 SillyTavern 和备份文件"
+    echo ""
+    
+    if ! gum confirm "确认要卸载脚本吗？此操作不可恢复！"; then
+        gum style --foreground 51 "已取消卸载"
+        return
+    fi
+    
+    echo ""
+    gum style --foreground 214 "最后确认: 真的要删除脚本吗？"
+    if ! gum confirm "再次确认卸载"; then
+        gum style --foreground 51 "已取消卸载"
+        return
+    fi
+    
+    echo ""
+    gum style --foreground 51 "开始卸载..."
+    
+    # 删除自启动
+    local bashrc="${HOME}/.bashrc"
+    if grep -q "ST_Chatelaine Auto-start" "$bashrc" 2>/dev/null; then
+        sed -i '/# ST_Chatelaine Auto-start/,+1d' "$bashrc"
+        gum style --foreground 212 "✓ 已移除自启动设置"
+    fi
+    
+    # 删除缓存文件
+    rm -f "${SCRIPT_DIR}/.remote_version_cache" "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
+    gum style --foreground 212 "✓ 已删除缓存文件"
+    
+    # 删除配置文件
+    rm -f "$CONFIG_FILE"
+    gum style --foreground 212 "✓ 已删除配置文件"
+    
+    # 删除脚本目录
+    gum style --foreground 245 "正在删除脚本目录: ${SCRIPT_DIR}"
+    
+    # 创建自删除脚本
+    cat > "/tmp/uninstall_st_chatelaine.sh" << 'UNINSTALL_EOF'
+#!/bin/bash
+sleep 1
+rm -rf "${1}"
+echo "脚本已卸载完成"
+rm -f "$0"
+UNINSTALL_EOF
+    
+    chmod +x "/tmp/uninstall_st_chatelaine.sh"
+    
+    gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
+    sleep 2
+    
+    # 执行自删除并退出
+    exec bash "/tmp/uninstall_st_chatelaine.sh" "${SCRIPT_DIR}"
+}
+
+# 安装酒馆函数
+install_st() {
+    gum style --foreground 51 "开始安装酒馆..."
+    echo ""
+    
+    if ! gum spin --spinner dot --title "更新软件包..." -- pkg update; then
+        gum style --foreground 196 "软件包更新失败"
+        return 1
+    fi
+    
+    if ! gum spin --spinner dot --title "安装依赖..." -- pkg install git nodejs-lts nano -y; then
+        gum style --foreground 196 "依赖安装失败"
+        return 1
+    fi
+    
+    local install_dir="$(dirname "${SCRIPT_DIR}")/SillyTavern"
+    if gum spin --spinner globe --title "克隆 SillyTavern 仓库..." -- \
+        git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir"; then
+        ST_DIR="$install_dir"
+        save_config
+        gum style --foreground 212 "酒馆安装成功！路径: $ST_DIR"
+        return 0
+    else
+        gum style --foreground 196 "安装失败，请检查网络连接"
+        return 1
+    fi
+}
+
 # 目录选择函数
 select_dir_gui() {
     if ! command -v fzf &> /dev/null; then
@@ -518,24 +741,71 @@ main() {
     # 首次运行设置
     if [[ "$FIRST_RUN_SETUP" == "true" ]]; then
         clear
+        echo ""
         gum style \
             --foreground 212 --border-foreground 212 --border double \
             --align center --width 60 --padding "1 2" \
             "欢迎使用 ST_Chatelaine" "" "首次运行配置"
         
         echo ""
-        gum style --foreground 214 "请设置自动备份上限（手动备份不计入上限）"
-        gum style --foreground 245 "建议值: 2-5 个，可以节省磁盘空间"
+        echo ""
+        
+        # 检查酒馆路径是否有效
+        if [[ ! -d "${ST_DIR}" ]]; then
+            gum style --foreground 214 --bold "未检测到酒馆路径"
+            gum style --foreground 245 "请选择操作"
+            echo ""
+            
+            local setup_choice=$(gum choose "指定已有酒馆路径" "安装新的酒馆" "稍后在主菜单设置")
+            
+            case "$setup_choice" in
+                "指定已有酒馆路径")
+                    ST_DIR=$(select_dir_gui "${HOME}")
+                    if [[ -n "$ST_DIR" ]]; then
+                        gum style --foreground 212 "已设置酒馆路径: $ST_DIR"
+                        save_config
+                    else
+                        gum style --foreground 196 "未选择路径，将在主菜单中设置"
+                        FIRST_RUN_SETUP=false
+                        sleep 2
+                        return
+                    fi
+                    ;;
+                "安装新的酒馆")
+                    if ! install_st; then
+                        FIRST_RUN_SETUP=false
+                        sleep 2
+                        return
+                    fi
+                    ;;
+                "稍后在主菜单设置")
+                    gum style --foreground 51 "提示: 您可以在主菜单中选择安装酒馆或指定路径"
+                    FIRST_RUN_SETUP=false
+                    sleep 2
+                    return
+                    ;;
+                *)
+                    FIRST_RUN_SETUP=false
+                    return
+                    ;;
+            esac
+            
+            echo ""
+        fi
+        
+        # 设置备份上限
+        gum style --foreground 214 --bold "请设置自动备份上限"
+        gum style --foreground 245 "手动备份不计入上限，建议值: 2-5 个"
         echo ""
         
         local new_limit
         while true; do
-            new_limit=$(gum input --placeholder "输入 1-99" --prompt "备份上限: " --width 20 --value "2")
+            new_limit=$(gum input --placeholder "输入 1-99" --prompt "备份上限: " --width 20 --value "2" --prompt.foreground 51)
             
             if [[ "$new_limit" =~ ^[0-9]+$ ]] && [[ $new_limit -ge 1 ]] && [[ $new_limit -le 99 ]]; then
                 BACKUP_LIMIT=$new_limit
                 save_config
-                gum style --foreground 212 "备份上限已设置为: $BACKUP_LIMIT"
+                gum style --foreground 212 "配置完成！备份上限: $BACKUP_LIMIT"
                 FIRST_RUN_SETUP=false
                 sleep 1
                 break
@@ -559,10 +829,8 @@ main() {
         in_main_menu=true
         
         if [[ -d "${ST_DIR}" ]]; then
-            ST_DISPLAY="${GREEN}${ST_DIR}${NC}"
             IS_VALID=true
         else
-            ST_DISPLAY="${RED}未指定${NC}"
             IS_VALID=false
         fi
 
@@ -571,7 +839,11 @@ main() {
         gum style --foreground 245 "项目地址: ${SCRIPT_REPO}"
         echo "----------------------------------------"
         echo " 脚本路径: ${SCRIPT_DIR}"
-        echo -e " 酒馆路径 : ${ST_DISPLAY}"
+        if [[ "$IS_VALID" == "true" ]]; then
+            echo " 酒馆路径: ${ST_DIR}"
+        else
+            gum style --foreground 196 " 酒馆路径: 未指定"
+        fi
         echo "----------------------------------------"
 
         if [[ "$IS_VALID" == "false" ]]; then
@@ -591,10 +863,7 @@ main() {
                     read -n 1 -s -r -p "按任意键返回主菜单..."
                     ;;
                 2) 
-                    echo "正在安装酒馆..."
-                    pkg update && pkg upgrade
-                    pkg install git nodejs-lts nano
-                    git clone https://github.com/SillyTavern/SillyTavern -b release $(dirname "${SCRIPT_DIR}")
+                    install_st
                     read -n 1 -s -r -p "按任意键返回主菜单..."
                     ;;
                 0) exit 0 ;;
@@ -611,6 +880,12 @@ main() {
         echo "4. 清理备份文件"
         echo "5. 设置"
         echo "6. 更新脚本"
+        if [[ "$AUTOSTART" == "true" ]]; then
+            echo "7. 取消脚本自启动"
+        else
+            echo "7. 设置脚本自启动"
+        fi
+        echo "8. 卸载脚本"
         echo "0. 退出"
         echo "----------------------------------------"
         read -n 1 -s -r -p "请输入: " choice
@@ -720,7 +995,9 @@ main() {
                     echo " 设置菜单"
                     echo "----------------------------------------"
                     echo "1. 修改酒馆路径"
-                    echo "2. 设置备份上限 (当前为: ${GREEN}${BACKUP_LIMIT}${NC})"
+                    echo -n "2. 设置备份上限 (当前为: "
+                    gum style --foreground 99 --inline "${BACKUP_LIMIT}"
+                    echo ")"
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
                     read -p "请输入: " setting_choice
@@ -769,6 +1046,13 @@ main() {
                     gum style --foreground 245 "正在检测远程版本..."
                 fi
                 read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            7)
+                set_autostart
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            8)
+                uninstall_script
                 ;;
             0) 
                 cleanup
