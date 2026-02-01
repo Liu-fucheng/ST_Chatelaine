@@ -10,9 +10,8 @@ SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
 
 # 获取脚本本地版本
 get_script_version() {
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [[ -d "${script_dir}/.git" ]]; then
-        git -C "${script_dir}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
+    if [[ -d "${SCRIPT_DIR_INIT}/.git" ]]; then
+        git -C "${SCRIPT_DIR_INIT}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
     else
         echo "v1.0.0"
     fi
