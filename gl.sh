@@ -1051,20 +1051,29 @@ uninstall_script() {
     
     gum style --foreground 245 "正在删除脚本目录: ${SCRIPT_DIR}"
     
-    cat > "/tmp/uninstall_st_chatelaine.sh" << 'UNINSTALL_EOF'
+
+    local uninstall_script="${HOME}/.uninstall_st_chatelaine.sh"
+    
+    cat > "$uninstall_script" << 'UNINSTALL_EOF'
 #!/bin/bash
 sleep 1
-rm -rf "${1}"
-echo "脚本已卸载完成"
+if [[ -d "${1}" ]]; then
+    rm -rf "${1}"
+    echo "✓ 脚本目录已删除: ${1}"
+else
+    echo "✓ 目录已不存在: ${1}"
+fi
+echo "脚本已卸载完成！"
+sleep 2
 rm -f "$0"
 UNINSTALL_EOF
     
-    chmod +x "/tmp/uninstall_st_chatelaine.sh"
+    chmod +x "$uninstall_script"
     
     gum style --foreground 212 "卸载完成！感谢使用 ST_Chatelaine"
-    sleep 2
+    sleep 1
     
-    exec bash "/tmp/uninstall_st_chatelaine.sh" "${SCRIPT_DIR}"
+    exec bash "$uninstall_script" "${SCRIPT_DIR}"
 }
 
 install_st() {
