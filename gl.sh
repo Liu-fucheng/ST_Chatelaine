@@ -37,7 +37,7 @@ cleanup() {
     fi
 }
 
-trap 'cleanup "interrupted"; exit 1' INT TERM HUP
+trap 'cleanup "interrupted"; cd "$HOME"; exit 1' INT TERM HUP
 
 # 目录
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -131,8 +131,9 @@ backup_st() {
     mkdir -p "$backup_dir"
     
     if [[ "$backup_type" == "auto" ]]; then
-        local one_hour_ago=$(date -d "1 hour ago" +%s 2>/dev/null || date -v-1H +%s 2>/dev/null)
-        local recent_backup=""
+        # 查找最新的备份文件（不限时间）
+        local latest_backup=""
+        local latest_time=0
         
         for backup_file in "${backup_dir}"/ST_Backup_*.tar.gz; do
             [[ -f "$backup_file" ]] || continue
@@ -140,19 +141,46 @@ backup_st() {
             [[ "$backup_file" == *"_manual.tar.gz" ]] && continue
             
             local file_time=$(stat -c %Y "$backup_file" 2>/dev/null || stat -f %m "$backup_file" 2>/dev/null)
-            if [[ $file_time -gt $one_hour_ago ]]; then
-                recent_backup="$backup_file"
-                break
+            if [[ $file_time -gt $latest_time ]]; then
+                latest_time=$file_time
+                latest_backup="$backup_file"
             fi
         done
         
-        if [[ -n "$recent_backup" ]]; then
-            local backup_age=$(( ($(date +%s) - $(stat -c %Y "$recent_backup" 2>/dev/null || stat -f %m "$recent_backup" 2>/dev/null)) / 60 ))
-            gum style --foreground 99 "检测到 ${backup_age} 分钟前已创建备份："
-            gum style --foreground 245 "  $(basename "$recent_backup")"
-            if ! gum confirm "是否仍要继续备份？"; then
-                gum style --foreground 99 "已取消备份"
-                return 0
+        if [[ -n "$latest_backup" ]]; then
+            local now=$(date +%s)
+            local age_seconds=$(( now - latest_time ))
+            local age_minutes=$(( age_seconds / 60 ))
+            local age_hours=$(( age_seconds / 3600 ))
+            local age_days=$(( age_seconds / 86400 ))
+            
+            # 格式化时间显示
+            local time_display=""
+            if [[ $age_days -gt 0 ]]; then
+                time_display="${age_days} 天"
+            elif [[ $age_hours -gt 0 ]]; then
+                time_display="${age_hours} 小时"
+            else
+                time_display="${age_minutes} 分钟"
+            fi
+            
+            gum style --foreground 99 "检测到 ${time_display} 前备份的文件："
+            gum style --foreground 245 "  $(basename "$latest_backup")"
+            
+            if ! gum confirm "是否继续备份？"; then
+                # 如果备份超过3天，再次确认
+                if [[ $age_days -ge 3 ]]; then
+                    gum style --foreground 196 --bold "警告: 上次备份已超过 ${age_days} 天"
+                    if ! gum confirm "确认不进行备份吗？"; then
+                        gum style --foreground 99 "开始备份..."
+                    else
+                        gum style --foreground 99 "已取消备份"
+                        return 0
+                    fi
+                else
+                    gum style --foreground 99 "已取消备份"
+                    return 0
+                fi
             fi
         fi
     fi
@@ -465,29 +493,44 @@ select_tag_interactive() {
     
     # 检测当前分支
     local current_branch=$(git -C "$ST_DIR" branch --show-current 2>/dev/null)
-    
-    # 确定要显示的tags范围
-    local tag_filter_branch="release"
-    if [[ -n "$current_branch" && "$current_branch" != "release" ]]; then
-        tag_filter_branch="$current_branch"
+    if [[ -n "$current_branch" ]]; then
         gum style --foreground 99 "当前分支: ${current_branch}"
-        gum style --foreground 245 "将显示 ${current_branch} 分支的版本"
-    else
-        gum style --foreground 99 "将显示 Release 分支的版本"
     fi
     echo ""
     
-    # 获取指定分支的tags
-    local selected_tag=$(gum spin --spinner dot --title "正在加载版本列表..." -- \
-        git -C "$ST_DIR" tag --merged "origin/${tag_filter_branch}" --sort=-creatordate --format='%(creatordate:short) | %(refname:short)' | \
-        gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本 (${tag_filter_branch})" | \
-        awk '{print $NF}')
+    # 获取所有tags并标注所属分支
+    gum style --foreground 245 "正在加载版本列表..."
+    local tag_list=$(mktemp)
+    TEMP_FILES+=("$tag_list")
     
-    if [[ -z "$selected_tag" ]]; then
+    # 获取所有tags及其日期
+    git -C "$ST_DIR" tag --sort=-creatordate --format='%(creatordate:short)|%(refname:short)' > "$tag_list"
+    
+    # 为每个tag标注所属分支
+    local formatted_tags=$(mktemp)
+    TEMP_FILES+=("$formatted_tags")
+    
+    while IFS='|' read -r date tag; do
+        # 检查tag属于哪些分支
+        local branches=$(git -C "$ST_DIR" branch -r --contains "$tag" 2>/dev/null | grep -v HEAD | sed 's/origin\///' | sed 's/^[ \t]*//' | tr '\n' ',' | sed 's/,$//')
+        
+        if [[ -z "$branches" ]]; then
+            echo "${date} | ${tag} | (未合并)"
+        else
+            echo "${date} | ${tag} | (${branches})"
+        fi
+    done < "$tag_list" > "$formatted_tags"
+    
+    local selected_line=$(cat "$formatted_tags" | gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本")
+    
+    if [[ -z "$selected_line" ]]; then
         gum style --foreground 99 "已取消版本切换"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
+    
+    # 提取tag名称（第二列）
+    local selected_tag=$(echo "$selected_line" | awk -F' \\| ' '{print $2}')
     
     gum style --foreground 212 "已选择版本: ${selected_tag}"
     echo ""
@@ -960,7 +1003,7 @@ main() {
                     install_st
                     read -n 1 -s -r -p "按任意键返回主菜单..."
                     ;;
-                0) exit 0 ;;
+                0) cd "$HOME"; exit 0 ;;
                 *) ;;
             esac
             continue
@@ -972,14 +1015,14 @@ main() {
         echo "2. 酒馆版本操作 (更新/切换版本/分支)"
         echo "3. 备份酒馆文件"
         echo "4. 清理备份文件"
-        echo "5. 设置菜单"
-        echo "6. 更新脚本"
+        echo "5. 更新脚本"
         if [[ "$AUTOSTART" == "true" ]]; then
-            echo "7. 取消脚本自启动"
+            echo "6. 取消脚本自启动"
         else
-            echo "7. 设置脚本自启动"
+            echo "6. 设置脚本自启动"
         fi
-        echo "8. 卸载脚本"
+        echo "7. 卸载脚本"
+        echo "8. 设置"
         echo "0. 退出"
         echo "----------------------------------------"
         read -n 1 -s -r -p "请输入: " choice
@@ -1006,7 +1049,7 @@ main() {
                     local exit_code=$?
                 fi
                 
-                trap 'cleanup "interrupted"; exit 1' INT TERM HUP
+                trap 'cleanup "interrupted"; cd "$HOME"; exit 1' INT TERM HUP
                 
                 gum style --foreground 212 "酒馆已停止"
                 
@@ -1115,6 +1158,45 @@ main() {
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             5)
+                gum style --foreground 212 "脚本当前版本: $(get_script_version)"
+                if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
+                    local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
+                    if [[ -n "$script_remote_commit" ]]; then
+                        if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
+                            gum style --foreground 99 "检测到新版本可用"
+                            echo ""
+                            if gum confirm "是否立即更新脚本？"; then
+                                if gum spin --spinner dot --title "正在拉取最新代码..." -- \
+                                    git -C "${SCRIPT_DIR}" pull origin main; then
+                                    # 清除版本缓存
+                                    rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
+                                    gum style --foreground 212 "更新成功！"
+                                    gum style --foreground 99 "请重启脚本以应用新版本"
+                                    echo ""
+                                    if gum confirm "是否立即重启脚本？"; then
+                                        exec bash "$0"
+                                    fi
+                                else
+                                    gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
+                                fi
+                            fi
+                        else
+                            gum style --foreground 212 "已是最新版本"
+                        fi
+                    fi
+                else
+                    gum style --foreground 245 "正在检测远程版本..."
+                fi
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            6)
+                set_autostart
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            7)
+                uninstall_script
+                ;;
+            8)
                 while true; do
                     clear
                     echo "----------------------------------------"
@@ -1180,46 +1262,8 @@ main() {
                     esac
                 done
                 ;;
-            6)
-                gum style --foreground 212 "脚本当前版本: $(get_script_version)"
-                if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
-                    local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
-                    if [[ -n "$script_remote_commit" ]]; then
-                        if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
-                            gum style --foreground 99 "检测到新版本可用"
-                            echo ""
-                            if gum confirm "是否立即更新脚本？"; then
-                                if gum spin --spinner dot --title "正在拉取最新代码..." -- \
-                                    git -C "${SCRIPT_DIR}" pull origin main; then
-                                    # 清除版本缓存
-                                    rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
-                                    gum style --foreground 212 "更新成功！"
-                                    gum style --foreground 99 "请重启脚本以应用新版本"
-                                    echo ""
-                                    if gum confirm "是否立即重启脚本？"; then
-                                        exec bash "$0"
-                                    fi
-                                else
-                                    gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
-                                fi
-                            fi
-                        else
-                            gum style --foreground 212 "已是最新版本"
-                        fi
-                    fi
-                else
-                    gum style --foreground 245 "正在检测远程版本..."
-                fi
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                ;;
-            7)
-                set_autostart
-                read -n 1 -s -r -p "按任意键返回主菜单..."
-                ;;
-            8)
-                uninstall_script
-                ;;
             0) 
+                cd "$HOME"
                 cleanup
                 exit 0 
                 ;;
@@ -1232,4 +1276,5 @@ main() {
 main
 
 # 脚本正常结束时清理
+cd "$HOME"
 cleanup
