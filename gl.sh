@@ -2,6 +2,7 @@
 
 # 脚本信息
 SCRIPT_VERSION="1.0.0"
+SCRIPT_COMMIT="initial"
 SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
 
 # 颜色
@@ -294,10 +295,11 @@ get_remote_version() {
     echo "$remote_tag"
 }
 
-# 获取脚本最新版本
+# 获取脚本最新版本和commit
 get_script_remote_version() {
-    local remote_tag=$(timeout 3s git ls-remote --tags --sort='v:refname' https://github.com/Liu-fucheng/ST_Chatelaine.git 2>/dev/null | tail -n1 | sed 's/.*\///; s/\^{}//')
-    echo "$remote_tag"
+    # 获取main分支的最新commit hash（短格式7位）
+    local remote_commit=$(timeout 3s git ls-remote https://github.com/Liu-fucheng/ST_Chatelaine.git HEAD 2>/dev/null | cut -f1 | cut -c1-7)
+    echo "$remote_commit"
 }
 
 # 后台预加载远程版本（SillyTavern和脚本）
@@ -311,10 +313,10 @@ preload_remote_version() {
             touch "${SCRIPT_DIR}/.version_updated"
         fi
         
-        # 加载脚本版本
-        SCRIPT_REMOTE_VER=$(get_script_remote_version)
-        if [[ -n "$SCRIPT_REMOTE_VER" ]]; then
-            echo "$SCRIPT_REMOTE_VER" > "${SCRIPT_DIR}/.script_version_cache"
+        # 加载脚本commit
+        SCRIPT_REMOTE_COMMIT=$(get_script_remote_version)
+        if [[ -n "$SCRIPT_REMOTE_COMMIT" ]]; then
+            echo "$SCRIPT_REMOTE_COMMIT" > "${SCRIPT_DIR}/.script_version_cache"
             # 设置刷新标志
             touch "${SCRIPT_DIR}/.version_updated"
         fi
@@ -368,9 +370,9 @@ check_version_status() {
     
     # 显示脚本版本状态
     if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
-        local script_remote=$(cat "${SCRIPT_DIR}/.script_version_cache")
-        if [[ -n "$script_remote" && "$script_remote" != "$SCRIPT_VERSION" ]]; then
-            gum style --foreground 51 "脚本更新: ${script_remote} 可用 (当前 ${SCRIPT_VERSION})"
+        local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
+        if [[ -n "$script_remote_commit" && "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
+            gum style --foreground 51 "脚本更新可用"
         fi
     fi
 }
@@ -1033,11 +1035,11 @@ main() {
             6)
                 gum style --foreground 212 "脚本当前版本: v${SCRIPT_VERSION}"
                 if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
-                    local script_remote=$(cat "${SCRIPT_DIR}/.script_version_cache")
-                    if [[ -n "$script_remote" ]]; then
-                        gum style --foreground 214 "远程最新版本: ${script_remote}"
-                        if [[ "$script_remote" != "$SCRIPT_VERSION" ]]; then
-                            gum style --foreground 51 "更新地址: ${SCRIPT_REPO}"
+                    local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
+                    if [[ -n "$script_remote_commit" ]]; then
+                        if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
+                            gum style --foreground 51 "检测到新版本可用"
+                            gum style --foreground 214 "更新地址: ${SCRIPT_REPO}"
                         else
                             gum style --foreground 212 "已是最新版本"
                         fi
