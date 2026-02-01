@@ -1000,8 +1000,8 @@ bash \"${script_path}\""
                     local marker_line=$(grep -n "enable programmable completion features" "$bashrc" | tail -1 | cut -d: -f1)
                     
                     if [[ -n "$marker_line" ]]; then
-                        # 找到标记后的 fi 或 #fi 行
-                        local end_line=$(tail -n +$((marker_line)) "$bashrc" | grep -n "^#\?fi$" | head -1 | cut -d: -f1)
+                        # 找到标记后的 fi 或 #fi 行（允许前后有空格）
+                        local end_line=$(tail -n +$((marker_line)) "$bashrc" | grep -n "^[ \t]*#\?fi[ \t]*$" | head -1 | cut -d: -f1)
                         if [[ -n "$end_line" ]]; then
                             end_line=$((marker_line + end_line))
                         else
@@ -1014,12 +1014,15 @@ bash \"${script_path}\""
                         # 保留前面的系统默认内容
                         head -n $end_line "$bashrc" > "$temp_file"
                         
-                        # 注释后面的用户添加内容（只注释启动脚本相关的行，保留配置）
-                        # 支持行首缩进，注释 bash/sh/source/while/for/case 等启动相关语句
-                        # 但保留 export/alias/PATH 等配置类语句
+                        # 注释用户添加的所有非空行和非纯注释行
+                        # 保留已经是注释的行，保留空行
                         tail -n +$((end_line + 1)) "$bashrc" | sed -E '
-                            # 注释启动脚本执行相关的行（允许缩进）
-                            s/^([ \t]*)(bash |sh |source |\. |while |for |if |case |echo |read |do$|done$|then$|else$|elif |fi$|esac$|;;$|\)|break$|continue$)/\1# \2/
+                            # 跳过空行
+                            /^[ \t]*$/b
+                            # 跳过已经是注释的行
+                            /^[ \t]*#/b
+                            # 其他所有行都在行首（保留缩进后）添加 #
+                            s/^([ \t]*)(.+)$/\1# \2/
                         ' >> "$temp_file"
                         
                         # 替换原文件
