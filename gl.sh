@@ -355,8 +355,8 @@ check_version_status() {
         REMOTE_VER="检测中..."
     fi
 
-    gum style --foreground 255 "本地版本: ${LOCAL_VER}"
-    gum style --foreground 255 "远程最新: ${REMOTE_VER}"
+    gum style --foreground 255 "酒馆本地版本: ${LOCAL_VER}"
+    gum style --foreground 255 "酒馆最新版本: ${REMOTE_VER}"
 
     if [[ "$LOCAL_VER" == "Unknown" ]]; then
         gum style --foreground 196 "状态: 无法识别本地 Git 版本"
@@ -368,11 +368,13 @@ check_version_status() {
         gum style --foreground 99 "状态: 有新版本可用"
     fi
     
+    echo "---"
+    
     # 显示脚本版本状态
     if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
         local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
         if [[ -n "$script_remote_commit" && "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
-            gum style --foreground 99 "脚本更新可用"
+            gum style --foreground 212 "脚本更新可用"
         fi
     fi
 }
@@ -840,9 +842,9 @@ main() {
         gum style --foreground 212 --bold "ST_Chatelaine v${SCRIPT_VERSION}"
         gum style --foreground 245 "项目地址: ${SCRIPT_REPO}"
         echo "----------------------------------------"
-        echo " 脚本路径: ${SCRIPT_DIR}"
+        echo "脚本路径: ${SCRIPT_DIR}"
         if [[ "$IS_VALID" == "true" ]]; then
-            echo " 酒馆路径: ${ST_DIR}"
+            echo "酒馆路径: ${ST_DIR}"
         else
             gum style --foreground 196 " 酒馆路径: 未指定"
         fi
@@ -900,7 +902,7 @@ main() {
             1)
                 trap - INT TERM HUP
                 
-                gum style --foreground 99 "正在启动酒馆..."
+                gum style --foreground 212 "正在启动酒馆..."
                 gum style --foreground 99 "提示: 按 Ctrl+C 可返回主菜单"
                 echo ""
                 
@@ -998,8 +1000,9 @@ main() {
                     echo "----------------------------------------"
                     echo "1. 修改酒馆路径"
                     echo -n "2. 设置备份上限 (当前为: "
-                    gum style --foreground 99 --inline "${BACKUP_LIMIT}"
-                    echo ")"
+                    gum style --foreground 99 "${BACKUP_LIMIT}"
+                    echo -n ")"
+                    echo ""
                     echo "0. 返回主菜单"
                     echo "----------------------------------------"
                     read -p "请输入: " setting_choice
@@ -1043,6 +1046,8 @@ main() {
                             if gum confirm "是否立即更新脚本？"; then
                                 if gum spin --spinner dot --title "正在拉取最新代码..." -- \
                                     git -C "${SCRIPT_DIR}" pull origin main; then
+                                    # 清除版本缓存
+                                    rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
                                     gum style --foreground 212 "更新成功！"
                                     gum style --foreground 99 "请重启脚本以应用新版本"
                                     echo ""
