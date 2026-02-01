@@ -126,10 +126,6 @@ backup_st() {
                 return 0
             fi
         fi
-            if ! gum confirm "是否继续备份？"; then
-                return 0
-            fi
-        fi
     fi
     
     # 生成备份文件名
