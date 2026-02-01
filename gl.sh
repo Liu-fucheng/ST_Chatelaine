@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 终端标题
+printf "ST_Chatelaine"
+
 # 脚本信息
 SCRIPT_COMMIT="initial"
 SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
@@ -218,13 +221,35 @@ backup_st() {
     for t in "${TARGETS[@]}"; do ABS_TARGETS+=("${ST_DIR}/$t"); done
     local TOTAL_SIZE=$(du -cb "${ABS_TARGETS[@]}" 2>/dev/null | tail -n1 | cut -f1)
 
-    (tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>"$ERROR_LOG") &
-    local tar_pid=$!
-    
-    gum spin --spinner dot --title "正在打包数据，请稍候..." -- sh -c "while kill -0 $tar_pid 2>/dev/null; do sleep 0.1; done"
-    
-    wait $tar_pid
-    local EXIT_CODE=$?
+    # 检查是否安装了 pv
+    if command -v pv &> /dev/null && [[ -n "$TOTAL_SIZE" ]] && [[ $TOTAL_SIZE -gt 0 ]]; then
+        # 使用 pv 显示详细进度
+        local TOTAL_SIZE_MB=$(echo "scale=2; $TOTAL_SIZE / 1048576" | bc)
+        gum style --foreground 212 "数据大小: ${TOTAL_SIZE_MB} MB"
+        gum style --foreground 99 "开始打包..."
+        echo ""
+        
+        if tar -c -C "$ST_DIR" "${TARGETS[@]}" 2>"$ERROR_LOG" | \
+            pv -s "$TOTAL_SIZE" -p -t -e -r -b -N "打包进度" | \
+            gzip > "$BACKUP_PATH"; then
+            local EXIT_CODE=0
+        else
+            local EXIT_CODE=$?
+        fi
+    else
+        # 如果没有 pv，使用原来的方式
+        if [[ ! $(command -v pv) ]]; then
+            gum style --foreground 245 "提示: 安装 pv 可显示详细进度 (pkg install pv)"
+        fi
+        
+        (tar -czf "$BACKUP_PATH" -C "$ST_DIR" "${TARGETS[@]}" 2>"$ERROR_LOG") &
+        local tar_pid=$!
+        
+        gum spin --spinner dot --title "正在打包数据，请稍候..." -- sh -c "while kill -0 $tar_pid 2>/dev/null; do sleep 0.1; done"
+        
+        wait $tar_pid
+        local EXIT_CODE=$?
+    fi
 
     if [[ ! -f "$BACKUP_PATH" ]] || [[ ! -s "$BACKUP_PATH" ]]; then
         EXIT_CODE=1
