@@ -728,10 +728,13 @@ update_st() {
         gum style --foreground 212 "代码更新成功"
 
         if [[ -f "${ST_DIR}/package.json" ]]; then
-            if gum spin --spinner dot --title "正在安装 npm 依赖..." -- \
-                sh -c "cd '$ST_DIR' && npm install --no-audit --fund=false 2>&1"; then
+            gum style --foreground 99 "正在安装 npm 依赖..."
+            echo ""
+            if (cd "$ST_DIR" && npm install --no-audit --fund=false); then
+                echo ""
                 gum style --foreground 212 "依赖安装完成"
             else
+                echo ""
                 gum style --foreground 99 "警告: 依赖安装可能遇到问题，请手动检查"
             fi
         fi
@@ -885,8 +888,10 @@ select_branch_interactive() {
             git -C "$ST_DIR" pull origin "$selected_branch"; then
             
             if [[ -f "${ST_DIR}/package.json" ]]; then
-                gum spin --spinner dot --title "正在安装 npm 依赖..." -- \
-                    sh -c "cd '$ST_DIR' && npm install --no-audit --fund=false 2>&1"
+                gum style --foreground 99 "正在安装 npm 依赖..."
+                echo ""
+                (cd "$ST_DIR" && npm install --no-audit --fund=false)
+                echo ""
             fi
             
             gum style \
@@ -1197,7 +1202,7 @@ install_st() {
     gum style --foreground 99 "开始安装酒馆..."
     echo ""
     
-    if ! gum spin --spinner dot --title "更新软件包..." -- pkg update; then
+    if ! gum spin --spinner dot --title "更新软件包..." -- sh -c "pkg update && pkg upgrade -y"; then
         gum style --foreground 196 "软件包更新失败"
         return 1
     fi
@@ -1214,8 +1219,6 @@ install_st() {
         git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>/dev/null; then
         ST_DIR="$install_dir"
         save_config
-        gum style --foreground 212 "酒馆安装成功！路径: $ST_DIR"
-        return 0
     else
         # 直连失败，尝试镜像源
         gum style --foreground 99 "直连失败，尝试使用镜像源..."
@@ -1223,12 +1226,47 @@ install_st() {
             git clone https://hk.gh-proxy.org/https://github.com/SillyTavern/SillyTavern -b release "$install_dir"; then
             ST_DIR="$install_dir"
             save_config
-            gum style --foreground 212 "酒馆安装成功！路径: $ST_DIR"
-            return 0
         else
-            gum style --foreground 196 "安装失败，请检查网络连接"
+            gum style --foreground 196 "克隆失败，请检查网络连接"
             return 1
         fi
+    fi
+    
+    gum style --foreground 212 "酒馆克隆成功！路径: $ST_DIR"
+    echo ""
+    
+    # 检查是否有备份，有则还原
+    local backup_dir="${SCRIPT_DIR}/backups"
+    if [[ -d "$backup_dir" ]]; then
+        local latest_backup=$(ls -t "${backup_dir}"/ST_Backup_*.tar.gz 2>/dev/null | head -n 1)
+        
+        if [[ -n "$latest_backup" ]]; then
+            gum style --foreground 99 "检测到备份文件: $(basename "$latest_backup")"
+            if gum confirm "是否还原此备份？"; then
+                gum style --foreground 99 "正在还原备份..."
+                if tar -xzf "$latest_backup" -C "$ST_DIR" 2>/dev/null; then
+                    gum style --foreground 212 "备份还原成功！"
+                    gum style --foreground 212 "酒馆安装完成！"
+                    return 0
+                else
+                    gum style --foreground 196 "备份还原失败，将继续安装依赖"
+                fi
+            fi
+        fi
+    fi
+    
+    # 没有备份或选择不还原，安装 npm 依赖
+    gum style --foreground 99 "正在安装 npm 依赖..."
+    echo ""
+    if (cd "$install_dir" && npm install --no-audit --fund=false); then
+        echo ""
+        gum style --foreground 212 "酒馆安装成功！"
+        return 0
+    else
+        echo ""
+        gum style --foreground 196 "npm 依赖安装失败"
+        gum style --foreground 99 "请稍后在主菜单选择'安装/重装酒馆依赖'重试"
+        return 1
     fi
 }
 
@@ -1537,52 +1575,28 @@ main() {
                 gum style --foreground 212 "开始安装/重装酒馆依赖..."
                 echo ""
                 
-                if [[ ! -d "$ST_DIR" ]]; then
-                    gum style --foreground 196 "错误: 酒馆目录不存在 ($ST_DIR)"
-                    read -n 1 -s -r -p "按任意键返回主菜单..."
-                    continue
-                fi
-                
-                cd "$ST_DIR" || {
-                    gum style --foreground 196 "错误: 无法进入酒馆目录"
-                    read -n 1 -s -r -p "按任意键返回主菜单..."
-                    continue
-                }
-                
-                if [[ ! -f "package.json" ]]; then
-                    gum style --foreground 196 "错误: 未找到 package.json 文件"
-                    read -n 1 -s -r -p "按任意键返回主菜单..."
-                    continue
-                fi
-                
-                if ! command -v npm &> /dev/null; then
-                    gum style --foreground 196 "错误: npm 未安装，请先安装 Node.js"
-                    read -n 1 -s -r -p "按任意键返回主菜单..."
-                    continue
-                fi
-                
-                gum style --foreground 99 "当前工作目录: $ST_DIR"
-                echo ""
-                
-                if [[ -d "node_modules" ]]; then
-                    if gum confirm "检测到已有依赖，是否清理后重新安装？"; then
-                        gum style --foreground 212 "正在清理旧依赖..."
-                        if gum spin --spinner dot --title "删除 node_modules..." -- \
-                            rm -rf node_modules package-lock.json; then
-                            gum style --foreground 212 "清理成功"
-                        else
-                            gum style --foreground 196 "清理失败，将尝试直接更新依赖"
-                        fi
-                        echo ""
-                    fi
-                fi
-                
-                # 安装依赖
-                gum style --foreground 212 "正在安装 npm 依赖..."
+                gum style --foreground 99 "正在更新软件包..."
                 echo ""
                 echo "----------------------------------------"
                 
-                if npm install; then
+                if pkg update && pkg upgrade -y; then
+                    echo "----------------------------------------"
+                    echo ""
+                    gum style --foreground 212 "✓ 软件包更新成功"
+                else
+                    echo "----------------------------------------"
+                    echo ""
+                    gum style --foreground 196 "✗ 软件包更新失败"
+                    read -n 1 -s -r -p "按任意键返回主菜单..."
+                    continue
+                fi
+                
+                echo ""
+                gum style --foreground 99 "正在安装依赖包..."
+                echo ""
+                echo "----------------------------------------"
+                
+                if pkg install git nodejs-lts nano -y; then
                     echo "----------------------------------------"
                     echo ""
                     gum style --foreground 212 "✓ 依赖安装成功！"
@@ -1590,7 +1604,6 @@ main() {
                     echo "----------------------------------------"
                     echo ""
                     gum style --foreground 196 "✗ 依赖安装失败"
-                    gum style --foreground 99 "请检查网络连接或手动执行 'cd $ST_DIR && npm install'"
                 fi
                 
                 echo ""
