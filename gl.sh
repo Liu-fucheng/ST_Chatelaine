@@ -1606,6 +1606,28 @@ main() {
                     gum style --foreground 196 "✗ 依赖安装失败"
                 fi
                 
+                # 检查是否需要重装 npm 依赖
+                echo ""
+                if [[ -d "$ST_DIR" ]] && [[ -f "${ST_DIR}/package.json" ]]; then
+                    gum style --foreground 99 "正在清理旧的 npm 依赖..."
+                    echo ""
+                    rm -rf "${ST_DIR}/node_modules" "${ST_DIR}/package-lock.json"
+                    
+                    gum style --foreground 99 "正在安装 npm 依赖..."
+                    echo ""
+                    echo "----------------------------------------"
+                    
+                    if (cd "$ST_DIR" && npm install --no-audit --fund=false); then
+                        echo "----------------------------------------"
+                        echo ""
+                        gum style --foreground 212 "✓ npm 依赖安装成功！"
+                    else
+                        echo "----------------------------------------"
+                        echo ""
+                        gum style --foreground 196 "✗ npm 依赖安装失败"
+                    fi
+                fi
+                
                 echo ""
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
