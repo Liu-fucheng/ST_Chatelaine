@@ -227,7 +227,7 @@ backup_st() {
     # 检查是否安装了 pv
     if command -v pv &> /dev/null && [[ -n "$TOTAL_SIZE" ]] && [[ $TOTAL_SIZE -gt 0 ]]; then
         # 使用 pv 显示详细进度
-        local TOTAL_SIZE_MB=$(echo "scale=2; $TOTAL_SIZE / 1048576" | bc)
+        local TOTAL_SIZE_MB=$(awk "BEGIN {printf \"%.2f\", $TOTAL_SIZE / 1048576}")
         gum style --foreground 212 "数据大小: ${TOTAL_SIZE_MB} MB"
         gum style --foreground 99 "开始打包..."
         echo ""
@@ -316,8 +316,8 @@ cleanup_old_backups() {
 manage_backups_interactive() {
     local backup_dir="${SCRIPT_DIR}/backups"
     
-    if [[ ! -d "$backup_dir" ]]; then
-        gum style --foreground 196 "错误: 备份目录不存在"
+    if ! mkdir -p "$backup_dir" 2>/dev/null; then
+        gum style --foreground 196 "错误: 无法创建备份目录 (权限不足或路径无效)"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
@@ -401,8 +401,8 @@ manage_backups_interactive() {
 restore_backup_interactive() {
     local backup_dir="${SCRIPT_DIR}/backups"
     
-    if [[ ! -d "$backup_dir" ]]; then
-        gum style --foreground 196 "错误: 备份目录不存在"
+    if ! mkdir -p "$backup_dir" 2>/dev/null; then
+        gum style --foreground 196 "错误: 无法创建备份目录 (权限不足或路径无效)"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         return 1
     fi
@@ -525,8 +525,8 @@ restore_st() {
 restore_latest() {
     local backup_dir="${SCRIPT_DIR}/backups"
     
-    if [[ ! -d "$backup_dir" ]]; then
-        gum style --foreground 196 "错误: 备份目录不存在"
+    if ! mkdir -p "$backup_dir" 2>/dev/null; then
+        gum style --foreground 196 "错误: 无法创建备份目录 (权限不足或路径无效)"
         return 1
     fi
 
@@ -1149,6 +1149,50 @@ UNINSTALL_EOF
     exec bash "$uninstall_script" "${SCRIPT_DIR}"
 }
 
+# 重装酒馆
+reinstall_st() {
+    gum style --foreground 196 --bold "重装酒馆"
+    gum style --foreground 99 "此操作将："
+    echo "  1. 备份当前酒馆数据"
+    echo "  2. 删除酒馆目录"
+    echo "  3. 重新安装酒馆"
+    gum style --foreground 245 "注意: 备份文件会保留"
+    echo ""
+    
+    if ! gum confirm "确认要重装酒馆吗？"; then
+        gum style --foreground 99 "已取消重装"
+        return 0
+    fi
+    
+    # 执行备份
+    gum style --foreground 99 "步骤 1/3: 备份当前数据..."
+    if ! backup_st "manual"; then
+        gum style --foreground 196 "备份失败，取消重装"
+        return 1
+    fi
+    
+    # 卸载酒馆
+    gum style --foreground 99 "步骤 2/3: 删除酒馆目录..."
+    if [[ -d "$ST_DIR" ]]; then
+        if gum spin --spinner dot --title "删除中..." -- rm -rf "$ST_DIR"; then
+            gum style --foreground 212 "酒馆目录已删除"
+        else
+            gum style --foreground 196 "删除失败，请检查权限"
+            return 1
+        fi
+    fi
+    
+    # 重新安装
+    gum style --foreground 99 "步骤 3/3: 重新安装酒馆..."
+    if install_st; then
+        gum style --foreground 212 "重装完成！"
+        return 0
+    else
+        gum style --foreground 196 "安装失败"
+        return 1
+    fi
+}
+
 install_st() {
     gum style --foreground 99 "开始安装酒馆..."
     echo ""
@@ -1356,12 +1400,13 @@ main() {
         echo "----------------------------------------"
         echo "1. 启动酒馆"
         echo "2. 酒馆版本操作 (更新/切换版本/分支)"
-        echo "3. 安装/重装酒馆依赖"
-        echo "4. 备份相关"
-        echo "5. 脚本相关"
-        echo "6. 设置"
+        echo "3. 重装酒馆"
+        echo "4. 安装/重装酒馆依赖"
+        echo "5. 备份相关"
+        echo "6. 脚本相关"
+        echo "7. 设置"
         if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
-            echo "7. $CUSTOM_SCRIPT_NAME"
+            echo "8. $CUSTOM_SCRIPT_NAME"
         fi
         echo "0. 退出"
         echo "----------------------------------------"
@@ -1485,6 +1530,10 @@ main() {
                 done
                 ;;
             3)
+                reinstall_st
+                read -n 1 -s -r -p "按任意键返回主菜单..."
+                ;;
+            4)
                 gum style --foreground 212 "开始安装/重装酒馆依赖..."
                 echo ""
                 
@@ -1547,7 +1596,7 @@ main() {
                 echo ""
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
-            4)
+            5)
                 while true; do
                     clear
                     echo "----------------------------------------"
@@ -1582,7 +1631,7 @@ main() {
                     esac
                 done
                 ;;
-            5)
+            6)
                 while true; do
                     clear
                     echo "----------------------------------------"
@@ -1678,7 +1727,7 @@ main() {
                     esac
                 done
                 ;;
-            6)
+            7)
                 while true; do
                     clear
                     echo "----------------------------------------"
@@ -1798,7 +1847,7 @@ main() {
                     esac
                 done
                 ;;
-            7)
+            8)
                 if [[ -n "$CUSTOM_SCRIPT_NAME" ]] && [[ -n "$CUSTOM_SCRIPT_PATH" ]]; then
                     gum style --foreground 212 "正在启动: $CUSTOM_SCRIPT_NAME"
                     echo ""
