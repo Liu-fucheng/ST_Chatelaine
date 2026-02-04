@@ -187,13 +187,22 @@ REMOTE_VER="--"
 # 自动检测并安装 pv
 if ! command -v pv &> /dev/null; then
     echo "检测到未安装 pv，正在自动安装..."
-    pkg install pv -y
+    pkg install pv -y 2>/dev/null
 fi
 
 # 自动检测并安装 gum
 if ! command -v gum &> /dev/null; then
     echo "检测到未安装 gum，正在自动安装..."
-    pkg install gum -y
+    pkg install gum -y 2>/dev/null
+    # 刷新命令缓存
+    hash -r 2>/dev/null || true
+fi
+
+# 再次检查 gum 是否可用
+if ! command -v gum &> /dev/null; then
+    echo "错误: gum 安装失败或不可用"
+    echo "请手动安装: pkg install gum -y"
+    exit 1
 fi
 
 # 32 位 Android 系统安装 esbuild
