@@ -685,16 +685,13 @@ preload_remote_version() {
 # 获取本地当前版本号
 get_local_version() {
     if [[ -d "${ST_DIR}/.git" ]]; then
-        git -C "$ST_DIR" describe --tags --abbrev=0 2>/dev/null || echo "Unknown"
-    else
-        echo "未检测到 Git"
-    fi
-}
-
-# 获取本地当前版本号
-get_local_version() {
-    if [[ -d "${ST_DIR}/.git" ]]; then
-        git -C "$ST_DIR" describe --tags --abbrev=0 2>/dev/null || echo "Unknown"
+        # 获取最近的 tag
+        local tag=$(git -C "$ST_DIR" describe --tags --abbrev=0 2>/dev/null)
+        if [[ -n "$tag" ]]; then
+            echo "$tag"
+        else
+            echo "Unknown"
+        fi
     else
         echo "未检测到 Git"
     fi
@@ -778,6 +775,14 @@ update_st() {
         git -C "$ST_DIR" fetch origin "$CURRENT_BRANCH"; then
         gum style --foreground 196 "错误: 拉取远程分支失败，请检查网络连接"
         return 1
+    fi
+    
+    # 获取所有 tags
+    gum style --foreground 99 "正在同步标签..."
+    if ! git -C "$ST_DIR" fetch --tags 2>/dev/null; then
+        gum style --foreground 245 "警告: 标签同步失败，但会继续更新"
+    else
+        gum style --foreground 212 "✓ 标签同步成功"
     fi
 
     git -C "$ST_DIR" reset --hard "origin/$CURRENT_BRANCH"
@@ -865,7 +870,16 @@ select_tag_interactive() {
         fi
     done < "$tag_list" > "$formatted_tags"
     
-    local selected_line=$(cat "$formatted_tags" | gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本")
+    # 检查是否有可用的版本
+    if [[ ! -s "$formatted_tags" ]]; then
+        gum style --foreground 196 "错误: 没有找到可用的版本"
+        gum style --foreground 99 "请检查网络连接或尝试 git fetch --tags"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        rm -f "$tag_list" "$formatted_tags"
+        return 1
+    fi
+    
+    local selected_line=$(gum filter --placeholder="搜索版本号..." --height=15 --header="选择要切换的版本" < "$formatted_tags")
     
     if [[ -z "$selected_line" ]]; then
         gum style --foreground 99 "已取消版本切换"
@@ -912,9 +926,23 @@ select_branch_interactive() {
     gum style --foreground 245 "提示: 输入可搜索，方向键选择，回车确认，Esc退出"
     echo ""
     
-    local selected_branch=$(gum spin --spinner dot --title "正在加载分支列表..." -- \
-        git -C "$ST_DIR" branch -r | grep -v 'HEAD' | sed 's/origin\///' | sed 's/^[ \t]*//' | \
-        gum filter --placeholder="搜索分支..." --height=15 --header="选择要切换的分支")
+    # 先获取分支列表
+    gum style --foreground 245 "正在加载分支列表..."
+    local branch_list=$(mktemp)
+    TEMP_FILES+=("$branch_list")
+    
+    git -C "$ST_DIR" branch -r 2>/dev/null | grep -v 'HEAD' | sed 's/origin\///' | sed 's/^[ \t]*//' > "$branch_list"
+    
+    if [[ ! -s "$branch_list" ]]; then
+        gum style --foreground 196 "错误: 没有找到可用的分支"
+        gum style --foreground 99 "请检查网络连接或尝试 git fetch"
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        rm -f "$branch_list"
+        return 1
+    fi
+    
+    local selected_branch=$(gum filter --placeholder="搜索分支..." --height=15 --header="选择要切换的分支" < "$branch_list")
+    rm -f "$branch_list"
     
     if [[ -z "$selected_branch" ]]; then
         gum style --foreground 99 "已取消分支切换"
@@ -939,6 +967,12 @@ select_branch_interactive() {
     
     # 设置远程仓库地址
     setup_git_remote "$ST_DIR" "https://github.com/SillyTavern/SillyTavern.git"
+    
+    # 同步 tags
+    gum style --foreground 99 "正在同步标签..."
+    if ! git -C "$ST_DIR" fetch --tags 2>/dev/null; then
+        gum style --foreground 245 "警告: 标签同步失败，但会继续切换"
+    fi
     
     if gum spin --spinner dot --title "正在切换到分支 ${selected_branch}..." -- \
         git -C "$ST_DIR" checkout -f "$selected_branch"; then
@@ -1390,6 +1424,9 @@ install_st() {
             gum style --foreground 212 "✓ 镜像源克隆成功"
             ST_DIR="$install_dir"
             save_config
+            # 获取 tags
+            gum style --foreground 99 "正在同步标签..."
+            git -C "$install_dir" fetch --tags 2>/dev/null && gum style --foreground 212 "✓ 标签同步成功" || gum style --foreground 245 "警告: 标签同步失败"
             rm -f "$clone_error"
         else
             # 镜像源失败，尝试直连
@@ -1403,6 +1440,9 @@ install_st() {
                 gum style --foreground 212 "✓ 直连克隆成功"
                 ST_DIR="$install_dir"
                 save_config
+                # 获取 tags
+                gum style --foreground 99 "正在同步标签..."
+                git -C "$install_dir" fetch --tags 2>/dev/null && gum style --foreground 212 "✓ 标签同步成功" || gum style --foreground 245 "警告: 标签同步失败"
                 rm -f "$clone_error"
             else
                 error_msg=$(cat "$clone_error" 2>/dev/null | tail -n 3)
@@ -1421,6 +1461,9 @@ install_st() {
             gum style --foreground 212 "✓ 直连克隆成功"
             ST_DIR="$install_dir"
             save_config
+            # 获取 tags
+            gum style --foreground 99 "正在同步标签..."
+            git -C "$install_dir" fetch --tags 2>/dev/null && gum style --foreground 212 "✓ 标签同步成功" || gum style --foreground 245 "警告: 标签同步失败"
             rm -f "$clone_error"
         else
             # 直连失败，尝试镜像源
@@ -1434,6 +1477,9 @@ install_st() {
                 gum style --foreground 212 "✓ 镜像源克隆成功"
                 ST_DIR="$install_dir"
                 save_config
+                # 获取 tags
+                gum style --foreground 99 "正在同步标签..."
+                git -C "$install_dir" fetch --tags 2>/dev/null && gum style --foreground 212 "✓ 标签同步成功" || gum style --foreground 245 "警告: 标签同步失败"
                 rm -f "$clone_error"
             else
                 error_msg=$(cat "$clone_error" 2>/dev/null | tail -n 3)
