@@ -11,7 +11,14 @@ SCRIPT_REPO="https://github.com/Liu-fucheng/ST_Chatelaine"
 # 获取脚本本地版本
 get_script_version() {
     if [[ -d "${SCRIPT_DIR_INIT}/.git" ]]; then
-        git -C "${SCRIPT_DIR_INIT}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
+        # 先尝试获取精确的 tag
+        local exact_tag=$(git -C "${SCRIPT_DIR_INIT}" describe --exact-match --tags 2>/dev/null)
+        if [[ -n "$exact_tag" ]]; then
+            echo "$exact_tag"
+        else
+            # 没有精确 tag，返回最近的 tag
+            git -C "${SCRIPT_DIR_INIT}" describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0"
+        fi
     else
         echo "v1.0.0"
     fi
@@ -1966,13 +1973,16 @@ main() {
                             if [[ -d "${SCRIPT_DIR}/.git" ]]; then
                                 setup_git_remote "${SCRIPT_DIR}" "https://github.com/Liu-fucheng/ST_Chatelaine.git"
                                 
-                                # 拉取远程信息
+                                # 拉取远程信息和 tags
                                 if ! git -C "${SCRIPT_DIR}" fetch origin main 2>/dev/null; then
                                     gum style --foreground 196 "错误: 无法连接到远程仓库"
                                     gum style --foreground 99 "请检查网络连接"
                                     read -n 1 -s -r -p "按任意键返回脚本菜单..."
                                     continue
                                 fi
+                                
+                                # 同步 tags
+                                git -C "${SCRIPT_DIR}" fetch --tags 2>/dev/null
                                 
                                 # 比较本地和远程 commit
                                 local local_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null)
