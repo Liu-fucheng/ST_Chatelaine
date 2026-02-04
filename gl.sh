@@ -114,6 +114,65 @@ EOF
 # 加载配置
 load_config
 
+# 检测脚本是否在 SillyTavern 目录内，如果是则自动迁移
+check_and_migrate_script() {
+    # 检查当前目录是否在 SillyTavern 目录内
+    local current_dir="$SCRIPT_DIR"
+    local parent_dir="$(dirname "$current_dir")"
+    local parent_name="$(basename "$parent_dir")"
+    
+    # 如果父目录是 SillyTavern，说明脚本在 ST 目录内
+    if [[ "$parent_name" == "SillyTavern" ]]; then
+        echo -e "${YELLOW}========================================${NC}"
+        echo -e "${YELLOW}警告: 检测到脚本位于 SillyTavern 目录内${NC}"
+        echo -e "${YELLOW}========================================${NC}"
+        echo -e "${RED}当前位置: $current_dir${NC}"
+        echo -e "${YELLOW}这会导致重装时备份文件也被删除！${NC}"
+        echo ""
+        echo -e "${GREEN}正在自动迁移脚本到安全位置...${NC}"
+        
+        # 新位置：SillyTavern 的同级目录
+        local grandparent_dir="$(dirname "$parent_dir")"
+        local script_folder_name="$(basename "$current_dir")"
+        local new_location="${grandparent_dir}/${script_folder_name}"
+        
+        # 如果目标位置已存在，添加时间戳避免冲突
+        if [[ -d "$new_location" ]]; then
+            new_location="${grandparent_dir}/${script_folder_name}_$(date +%Y%m%d_%H%M%S)"
+            echo -e "${YELLOW}目标位置已存在，使用新名称: $(basename "$new_location")${NC}"
+        fi
+        
+        echo -e "${CYAN}迁移路径:${NC}"
+        echo -e "  从: ${RED}$current_dir${NC}"
+        echo -e "  到: ${GREEN}$new_location${NC}"
+        echo ""
+        
+        # 执行迁移
+        if cp -r "$current_dir" "$new_location"; then
+            echo -e "${GREEN}✓ 迁移成功！${NC}"
+            echo ""
+            echo -e "${CYAN}正在重启脚本...${NC}"
+            sleep 1
+            
+            # 删除旧位置（在新位置启动后再删除更安全）
+            # 这里先不删除，让用户手动删除或下次重装时自动删除
+            
+            # 切换到新位置并重新执行脚本
+            cd "$new_location"
+            exec bash "${new_location}/$(basename "$0")"
+        else
+            echo -e "${RED}✗ 迁移失败，请手动移动脚本到 SillyTavern 目录外${NC}"
+            echo -e "${YELLOW}建议位置: $new_location${NC}"
+            echo ""
+            read -n 1 -s -r -p "按任意键继续（风险自负）..."
+            echo ""
+        fi
+    fi
+}
+
+# 执行检测和迁移
+check_and_migrate_script
+
 #版本号
 LOCAL_VER="--"
 REMOTE_VER="--"
@@ -1164,6 +1223,19 @@ reinstall_st() {
     gum style --foreground 245 "注意: 备份文件会保留"
     echo ""
     
+    # 双重安全检查：确保脚本不在 ST 目录内
+    if [[ "$SCRIPT_DIR" == "$ST_DIR"* ]]; then
+        gum style --foreground 196 --bold "错误: 脚本位于 SillyTavern 目录内"
+        gum style --foreground 196 "脚本路径: $SCRIPT_DIR"
+        gum style --foreground 196 "ST 路径: $ST_DIR"
+        echo ""
+        gum style --foreground 99 "重装会删除整个 ST 目录，包括此脚本和备份！"
+        gum style --foreground 99 "请先将脚本移动到 ST 目录外再进行重装"
+        echo ""
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+        return 1
+    fi
+    
     if ! gum confirm "确认要重装酒馆吗？"; then
         gum style --foreground 99 "已取消重装"
         return 0
@@ -1175,6 +1247,57 @@ reinstall_st() {
         gum style --foreground 196 "备份失败，取消重装"
         return 1
     fi
+    
+    # 验证备份文件
+    gum style --foreground 99 "验证备份文件..."
+    local backup_dir="${SCRIPT_DIR}/backups"
+    local latest_backup=$(ls -t "${backup_dir}"/ST_Backup_*_manual.tar.gz 2>/dev/null | head -n1)
+    
+    if [[ -z "$latest_backup" ]] || [[ ! -f "$latest_backup" ]]; then
+        gum style --foreground 196 "错误: 备份文件不存在，取消重装"
+        return 1
+    fi
+    
+    # 检查文件大小（至少应该大于 100KB）
+    local file_size=$(stat -c %s "$latest_backup" 2>/dev/null || stat -f %z "$latest_backup" 2>/dev/null)
+    if [[ $file_size -lt 102400 ]]; then
+        gum style --foreground 196 "错误: 备份文件过小 ($(du -h "$latest_backup" | cut -f1))，可能损坏"
+        gum style --foreground 196 "取消重装以保护数据安全"
+        return 1
+    fi
+    
+    # 检查备份内容
+    gum style --foreground 99 "检查备份内容..."
+    local temp_check=$(mktemp)
+    if ! tar -tzf "$latest_backup" > "$temp_check" 2>/dev/null; then
+        gum style --foreground 196 "错误: 备份文件损坏，无法解压"
+        rm -f "$temp_check"
+        return 1
+    fi
+    
+    # 检查是否包含 data 目录
+    if ! grep -q "^data/" "$temp_check"; then
+        gum style --foreground 196 "警告: 备份中未找到 data 目录"
+        rm -f "$temp_check"
+        if ! gum confirm "备份可能不完整，是否继续重装？"; then
+            gum style --foreground 99 "已取消重装"
+            return 1
+        fi
+    else
+        # 检查 data 目录是否为空
+        local data_files=$(grep "^data/" "$temp_check" | wc -l)
+        if [[ $data_files -le 1 ]]; then
+            gum style --foreground 196 "警告: data 目录为空或几乎为空"
+            rm -f "$temp_check"
+            if ! gum confirm "备份可能不完整，是否继续重装？"; then
+                gum style --foreground 99 "已取消重装"
+                return 1
+            fi
+        else
+            gum style --foreground 212 "✓ 备份验证通过 (大小: $(du -h "$latest_backup" | cut -f1), data文件: $data_files)"
+        fi
+    fi
+    rm -f "$temp_check"
     
     # 卸载酒馆
     gum style --foreground 99 "步骤 2/3: 删除酒馆目录..."
@@ -1202,33 +1325,125 @@ install_st() {
     gum style --foreground 99 "开始安装酒馆..."
     echo ""
     
-    if ! gum spin --spinner dot --title "更新软件包..." -- sh -c "pkg update && pkg upgrade -y"; then
-        gum style --foreground 196 "软件包更新失败"
-        return 1
+    # 检查依赖是否已安装
+    local need_update=false
+    if ! command -v git &> /dev/null || ! command -v node &> /dev/null; then
+        need_update=true
+        gum style --foreground 99 "检测到缺少必要依赖，需要安装..."
+    else
+        gum style --foreground 212 "✓ 检测到 git 和 nodejs 已安装"
+        if gum confirm "是否跳过软件包更新和依赖安装？"; then
+            gum style --foreground 99 "已跳过更新步骤"
+        else
+            need_update=true
+        fi
     fi
     
-    if ! gum spin --spinner dot --title "安装依赖..." -- pkg install git nodejs-lts nano -y; then
-        gum style --foreground 196 "依赖安装失败"
-        return 1
+    if [[ "$need_update" == "true" ]]; then
+        gum style --foreground 99 "正在更新软件包..."
+        if ! gum spin --spinner dot --title "更新软件包..." -- sh -c "pkg update && pkg upgrade -y" 2>/dev/null; then
+            gum style --foreground 196 "软件包更新失败"
+            if ! gum confirm "是否继续安装？（可能导致依赖问题）"; then
+                return 1
+            fi
+        fi
+        
+        gum style --foreground 99 "正在安装依赖..."
+        if ! gum spin --spinner dot --title "安装依赖..." -- pkg install git nodejs-lts nano -y 2>/dev/null; then
+            gum style --foreground 196 "依赖安装失败"
+            if ! gum confirm "是否继续安装？（可能导致问题）"; then
+                return 1
+            fi
+        fi
     fi
     
     local install_dir="$(dirname "${SCRIPT_DIR}")/SillyTavern"
     
-    # 先尝试直连克隆
-    if gum spin --spinner globe --title "克隆 SillyTavern 仓库..." -- \
-        git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>/dev/null; then
-        ST_DIR="$install_dir"
-        save_config
+    # 检查目标目录是否已存在
+    if [[ -d "$install_dir" ]]; then
+        gum style --foreground 99 "检测到目标目录已存在: $install_dir"
+        if gum confirm "是否删除现有目录并重新克隆？"; then
+            gum style --foreground 99 "正在删除现有目录..."
+            rm -rf "$install_dir"
+        else
+            gum style --foreground 99 "已取消安装"
+            return 1
+        fi
+    fi
+    
+    # 优先使用镜像源（国外源经常失败）
+    local clone_error=$(mktemp)
+    TEMP_FILES+=("$clone_error")
+    
+    gum style --foreground 99 "选择克隆源..."
+    local use_mirror=true
+    if gum confirm "是否使用镜像源？（推荐，更稳定）"; then
+        use_mirror=true
     else
-        # 直连失败，尝试镜像源
-        gum style --foreground 99 "直连失败，尝试使用镜像源..."
-        if gum spin --spinner globe --title "使用镜像源克隆..." -- \
-            git clone https://hk.gh-proxy.org/https://github.com/SillyTavern/SillyTavern -b release "$install_dir"; then
+        use_mirror=false
+    fi
+    
+    if [[ "$use_mirror" == "true" ]]; then
+        # 优先镜像源
+        gum style --foreground 99 "正在使用镜像源克隆..."
+        if git clone https://hk.gh-proxy.org/https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>"$clone_error"; then
+            gum style --foreground 212 "✓ 镜像源克隆成功"
             ST_DIR="$install_dir"
             save_config
+            rm -f "$clone_error"
         else
-            gum style --foreground 196 "克隆失败，请检查网络连接"
-            return 1
+            # 镜像源失败，尝试直连
+            local error_msg=$(cat "$clone_error" 2>/dev/null | head -n 3)
+            if [[ -n "$error_msg" ]]; then
+                gum style --foreground 245 "错误详情: $error_msg"
+            fi
+            
+            gum style --foreground 99 "镜像源失败，尝试直连..."
+            if git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>"$clone_error"; then
+                gum style --foreground 212 "✓ 直连克隆成功"
+                ST_DIR="$install_dir"
+                save_config
+                rm -f "$clone_error"
+            else
+                error_msg=$(cat "$clone_error" 2>/dev/null | tail -n 3)
+                gum style --foreground 196 "克隆失败"
+                if [[ -n "$error_msg" ]]; then
+                    gum style --foreground 245 "错误详情: $error_msg"
+                fi
+                rm -f "$clone_error"
+                return 1
+            fi
+        fi
+    else
+        # 优先直连
+        gum style --foreground 99 "正在使用直连克隆..."
+        if git clone https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>"$clone_error"; then
+            gum style --foreground 212 "✓ 直连克隆成功"
+            ST_DIR="$install_dir"
+            save_config
+            rm -f "$clone_error"
+        else
+            # 直连失败，尝试镜像源
+            local error_msg=$(cat "$clone_error" 2>/dev/null | head -n 3)
+            if [[ -n "$error_msg" ]]; then
+                gum style --foreground 245 "错误详情: $error_msg"
+            fi
+            
+            gum style --foreground 99 "直连失败，尝试使用镜像源..."
+            if git clone https://hk.gh-proxy.org/https://github.com/SillyTavern/SillyTavern -b release "$install_dir" 2>"$clone_error"; then
+                gum style --foreground 212 "✓ 镜像源克隆成功"
+                ST_DIR="$install_dir"
+                save_config
+                rm -f "$clone_error"
+            else
+                error_msg=$(cat "$clone_error" 2>/dev/null | tail -n 3)
+                gum style --foreground 196 "克隆失败"
+                if [[ -n "$error_msg" ]]; then
+                    gum style --foreground 245 "错误详情: $error_msg"
+                fi
+                rm -f "$clone_error"
+                return 1
+            fi
         fi
     fi
     
@@ -1236,6 +1451,7 @@ install_st() {
     echo ""
     
     # 检查是否有备份，有则还原
+    local backup_restored=false
     local backup_dir="${SCRIPT_DIR}/backups"
     if [[ -d "$backup_dir" ]]; then
         local latest_backup=$(ls -t "${backup_dir}"/ST_Backup_*.tar.gz 2>/dev/null | head -n 1)
@@ -1245,26 +1461,30 @@ install_st() {
             if gum confirm "是否还原此备份？"; then
                 gum style --foreground 99 "正在还原备份..."
                 if tar -xzf "$latest_backup" -C "$ST_DIR" 2>/dev/null; then
-                    gum style --foreground 212 "备份还原成功！"
-                    gum style --foreground 212 "酒馆安装完成！"
-                    return 0
+                    gum style --foreground 212 "✓ 备份还原成功！"
+                    backup_restored=true
                 else
-                    gum style --foreground 196 "备份还原失败，将继续安装依赖"
+                    gum style --foreground 196 "✗ 备份还原失败"
                 fi
             fi
         fi
     fi
     
-    # 没有备份或选择不还原，安装 npm 依赖
+    # 安装 npm 依赖（必须执行，因为备份不包含 node_modules）
     gum style --foreground 99 "正在安装 npm 依赖..."
+    gum style --foreground 245 "提示: 备份不包含 node_modules，需要重新安装依赖"
+    gum style --foreground 245 "这可能需要几分钟时间..."
     echo ""
+    
     if (cd "$install_dir" && npm install --no-audit --fund=false); then
         echo ""
-        gum style --foreground 212 "酒馆安装成功！"
+        gum style --foreground 212 "✓ npm 依赖安装成功！"
+        echo ""
+        gum style --foreground 212 --border double --padding "1 2" "酒馆安装完成！"
         return 0
     else
         echo ""
-        gum style --foreground 196 "npm 依赖安装失败"
+        gum style --foreground 196 "✗ npm 依赖安装失败"
         gum style --foreground 99 "请稍后在主菜单选择'安装/重装酒馆依赖'重试"
         return 1
     fi
@@ -1389,10 +1609,17 @@ main() {
         
         in_main_menu=true
         
-        if [[ -d "${ST_DIR}" ]]; then
+        # 验证酒馆路径有效性：目录存在且包含关键文件
+        if [[ -d "${ST_DIR}" ]] && [[ -f "${ST_DIR}/start.sh" || -f "${ST_DIR}/server.js" ]]; then
             IS_VALID=true
         else
             IS_VALID=false
+            # 如果目录存在但缺少关键文件，清空路径
+            if [[ -d "${ST_DIR}" ]] && [[ ! -f "${ST_DIR}/start.sh" ]] && [[ ! -f "${ST_DIR}/server.js" ]]; then
+                gum style --foreground 196 "警告: 目录 ${ST_DIR} 不是有效的酒馆安装（缺少 start.sh 或 server.js）" 2>/dev/null || true
+                ST_DIR=""
+                save_config
+            fi
         fi
 
         clear
