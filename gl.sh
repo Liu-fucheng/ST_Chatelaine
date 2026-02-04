@@ -1960,67 +1960,58 @@ main() {
                     case $script_choice in
                         1)
                             gum style --foreground 212 "脚本当前版本: $(get_script_version)"
-                            if [[ -f "${SCRIPT_DIR}/.script_version_cache" ]]; then
-                                local script_remote_commit=$(cat "${SCRIPT_DIR}/.script_version_cache")
-                                if [[ -n "$script_remote_commit" ]]; then
-                                    if [[ "$script_remote_commit" != "$SCRIPT_COMMIT" ]]; then
-                                        gum style --foreground 99 "检测到新版本可用"
-                                        echo ""
-                                        if gum confirm "是否立即更新脚本？"; then
-                                            # 设置远程仓库地址
-                                            setup_git_remote "${SCRIPT_DIR}" "https://github.com/Liu-fucheng/ST_Chatelaine.git"
-                                            
-                                            if gum spin --spinner dot --title "正在拉取最新代码..." -- \
-                                                git -C "${SCRIPT_DIR}" pull origin main; then
-                                                rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
-                                                gum style --foreground 212 "更新成功！"
-                                                gum style --foreground 99 "请重启脚本以应用新版本"
-                                                echo ""
-                                                if gum confirm "是否立即重启脚本？"; then
-                                                    exec bash "${SCRIPT_DIR}/$(basename "$0")"
-                                                fi
-                                            else
-                                                gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
+                            gum style --foreground 99 "正在检查远程版本..."
+                            
+                            # 先设置远程仓库
+                            if [[ -d "${SCRIPT_DIR}/.git" ]]; then
+                                setup_git_remote "${SCRIPT_DIR}" "https://github.com/Liu-fucheng/ST_Chatelaine.git"
+                                
+                                # 拉取远程信息
+                                if ! git -C "${SCRIPT_DIR}" fetch origin main 2>/dev/null; then
+                                    gum style --foreground 196 "错误: 无法连接到远程仓库"
+                                    gum style --foreground 99 "请检查网络连接"
+                                    read -n 1 -s -r -p "按任意键返回脚本菜单..."
+                                    continue
+                                fi
+                                
+                                # 比较本地和远程 commit
+                                local local_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null)
+                                local remote_commit=$(git -C "${SCRIPT_DIR}" rev-parse --short origin/main 2>/dev/null)
+                                
+                                if [[ -z "$remote_commit" ]]; then
+                                    gum style --foreground 196 "错误: 无法获取远程版本信息"
+                                    read -n 1 -s -r -p "按任意键返回脚本菜单..."
+                                    continue
+                                fi
+                                
+                                if [[ "$local_commit" == "$remote_commit" ]]; then
+                                    gum style --foreground 212 "✓ 已是最新版本"
+                                    gum style --foreground 245 "本地: $local_commit | 远程: $remote_commit"
+                                else
+                                    gum style --foreground 99 "检测到新版本可用"
+                                    gum style --foreground 245 "本地: $local_commit → 远程: $remote_commit"
+                                    echo ""
+                                    if gum confirm "是否立即更新脚本？"; then
+                                        if gum spin --spinner dot --title "正在拉取最新代码..." -- \
+                                            git -C "${SCRIPT_DIR}" pull origin main; then
+                                            rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
+                                            gum style --foreground 212 "✓ 更新成功！"
+                                            gum style --foreground 99 "请重启脚本以应用新版本"
+                                            echo ""
+                                            if gum confirm "是否立即重启脚本？"; then
+                                                exec bash "${SCRIPT_DIR}/$(basename "$0")"
                                             fi
+                                        else
+                                            gum style --foreground 196 "✗ 更新失败"
+                                            gum style --foreground 99 "请尝试手动执行: cd ${SCRIPT_DIR} && git pull origin main"
                                         fi
-                                    else
-                                        gum style --foreground 212 "已是最新版本"
                                     fi
                                 fi
                             else
-                                gum style --foreground 245 "正在检测远程版本..."
-                                sleep 2
-                                
-                                local remote_commit=$(get_script_remote_version)
-                                if [[ -n "$remote_commit" ]]; then
-                                    echo "$remote_commit" > "${SCRIPT_DIR}/.script_version_cache"
-                                    if [[ "$remote_commit" != "$SCRIPT_COMMIT" ]]; then
-                                        gum style --foreground 99 "检测到新版本可用"
-                                        echo ""
-                                        if gum confirm "是否立即更新脚本？"; then
-                                            # 设置远程仓库地址
-                                            setup_git_remote "${SCRIPT_DIR}" "https://github.com/Liu-fucheng/ST_Chatelaine.git"
-                                            
-                                            if gum spin --spinner dot --title "正在拉取最新代码..." -- \
-                                                git -C "${SCRIPT_DIR}" pull origin main; then
-                                                rm -f "${SCRIPT_DIR}/.script_version_cache" "${SCRIPT_DIR}/.version_updated"
-                                                gum style --foreground 212 "更新成功！"
-                                                gum style --foreground 99 "请重启脚本以应用新版本"
-                                                echo ""
-                                                if gum confirm "是否立即重启脚本？"; then
-                                                    exec bash "${SCRIPT_DIR}/$(basename "$0")"
-                                                fi
-                                            else
-                                                gum style --foreground 196 "更新失败，请检查网络或手动执行 git pull"
-                                            fi
-                                        fi
-                                    else
-                                        gum style --foreground 212 "已是最新版本"
-                                    fi
-                                else
-                                    gum style --foreground 196 "网络连接失败，无法检测远程版本"
-                                fi
+                                gum style --foreground 196 "错误: 脚本目录不是 Git 仓库"
+                                gum style --foreground 99 "无法自动更新，请手动下载最新版本"
                             fi
+                            
                             read -n 1 -s -r -p "按任意键返回脚本菜单..."
                             ;;
                         2)
