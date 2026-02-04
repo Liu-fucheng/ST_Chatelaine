@@ -205,6 +205,32 @@ if ! command -v gum &> /dev/null; then
     exit 1
 fi
 
+# 设置 gum 错误追踪
+export GUM_DEBUG=0
+
+# gum 包装函数，用于捕获和显示详细错误
+safe_gum() {
+    local cmd="$1"
+    shift
+    local error_log=$(mktemp)
+    
+    if ! gum "$cmd" "$@" 2>"$error_log"; then
+        local exit_code=$?
+        if [[ -s "$error_log" ]]; then
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+            echo "GUM 命令执行失败 (退出码: $exit_code)" >&2
+            echo "命令: gum $cmd $*" >&2
+            echo "错误详情:" >&2
+            cat "$error_log" >&2
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+        fi
+        rm -f "$error_log"
+        return $exit_code
+    fi
+    rm -f "$error_log"
+    return 0
+}
+
 # 32 位 Android 系统安装 esbuild
 if [[ "$(uname -o)" == "Android" && "$(uname -m)" == "armv7l" ]]; then
     if ! command -v esbuild &> /dev/null; then
@@ -433,7 +459,7 @@ manage_backups_interactive() {
         echo "${date_str} | ${size} | ${type_tag} ${filename}" >> "$backup_list"
     done
     
-    local selected_lines=$(cat "$backup_list" | gum choose --no-limit --height=15 --header="选择要删除的备份文件（可多选）")
+    local selected_lines=$(gum choose --no-limit --height=15 --header="选择要删除的备份文件（可多选）" < "$backup_list")
     
     if [[ -z "$selected_lines" ]]; then
         gum style --foreground 99 "已取消删除"
@@ -532,7 +558,7 @@ restore_backup_interactive() {
             echo "${date_str} | ${size} | ${type_tag} ${filename}" >> "$backup_list"
         done
         
-        local selected_line=$(cat "$backup_list" | gum filter --placeholder="搜索备份..." --height=15 --header="选择要还原的备份文件")
+        local selected_line=$(gum filter --placeholder="搜索备份..." --height=15 --header="选择要还原的备份文件" < "$backup_list")
         
         if [[ -z "$selected_line" ]]; then
             gum style --foreground 99 "已取消还原"
@@ -673,7 +699,12 @@ setup_git_remote() {
     else
         # 使用镜像源
         git -C "$repo_path" remote set-url origin "$mirror_url" 2>/dev/null || true
-        gum style --foreground 99 "网络不佳，已切换至镜像源"
+        # 检查 gum 是否可用
+        if command -v gum &> /dev/null; then
+            gum style --foreground 99 "网络不佳，已切换至镜像源" 2>/dev/null || echo "网络不佳，已切换至镜像源"
+        else
+            echo "网络不佳，已切换至镜像源"
+        fi
         return 1
     fi
 }
@@ -1584,15 +1615,33 @@ select_dir_gui() {
 }
 
 main() {
+    # 调试信息：确认 gum 可用性
+    if ! command -v gum &> /dev/null; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "致命错误: main 函数启动时 gum 不可用"
+        echo "PATH: $PATH"
+        echo "尝试查找 gum: $(which gum 2>&1 || echo '未找到')"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        exit 1
+    fi
+    
     preload_remote_version
     
     if [[ "$FIRST_RUN_SETUP" == "true" ]]; then
         clear
         echo ""
-        gum style \
+        
+        # 使用错误处理包装 gum 调用
+        if ! gum style \
             --foreground 212 --border-foreground 212 --border double \
             --align center --width 60 --padding "1 2" \
-            "欢迎使用 ST Chatelaine" "" "首次运行配置"
+            "欢迎使用 ST Chatelaine" "" "首次运行配置" 2>&1; then
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "错误位置: main() -> FIRST_RUN_SETUP -> gum style (欢迎信息)"
+            echo "这是脚本中第一个 gum 调用"
+            echo "gum 版本: $(gum version 2>&1 || echo '无法获取')"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        fi
         
         echo ""
         echo ""
@@ -2199,7 +2248,31 @@ main() {
     done
 }
 
-# 启动主程序
+# 启动主程序前最后检查
+echo "正在启动 ST Chatelaine..."
+echo "检查 gum 状态: $(command -v gum && echo '✓ 可用' || echo '✗ 不可用')"
+
+if ! command -v gum &> /dev/null; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "严重错误: 启动 main 前 gum 仍然不可用"
+    echo "已执行的检查步骤："
+    echo "  1. 检测 gum 是否安装"
+    echo "  2. 自动安装 gum (如需要)"
+    echo "  3. 刷新命令缓存 (hash -r)"
+    echo "  4. 二次确认 gum 可用性"
+    echo ""
+    echo "当前 PATH: $PATH"
+    echo "pkg 路径: $(which pkg 2>&1 || echo '未找到')"
+    echo "gum 路径: $(which gum 2>&1 || echo '未找到')"
+    echo ""
+    echo "建议手动执行以下命令后重试:"
+    echo "  pkg install gum -y"
+    echo "  hash -r"
+    echo "  gum version"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    exit 1
+fi
+
 main
 
 # 脚本正常结束时清理
