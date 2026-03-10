@@ -205,6 +205,28 @@ if ! command -v gum &> /dev/null; then
     exit 1
 fi
 
+# 固定 gum 可执行文件路径，避免被用户环境中的 alias/function 污染
+GUM_BIN="$(command -v gum 2>/dev/null || true)"
+if [[ -z "$GUM_BIN" ]] || [[ ! -x "$GUM_BIN" ]]; then
+    echo "错误: 未找到可执行的 gum"
+    echo "请手动安装: pkg install gum -y"
+    exit 1
+fi
+
+# 清理继承的同名定义，并在脚本内统一通过绝对路径调用 gum
+unalias gum 2>/dev/null || true
+unset -f gum 2>/dev/null || true
+gum() {
+    "$GUM_BIN" "$@"
+}
+
+# 启动前最小自检，确保 gum 实际可执行
+if ! gum --version >/dev/null 2>&1; then
+    echo "错误: gum 无法正常执行"
+    echo "当前 gum 路径: $GUM_BIN"
+    exit 1
+fi
+
 # 设置 gum 错误追踪
 export GUM_DEBUG=0
 
@@ -1910,30 +1932,41 @@ main() {
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
             4)
-                gum style --foreground 212 "开始安装/重装酒馆依赖..."
+                gum style --foreground 212 "依赖管理"
+                gum style --foreground 245 "使用方向键选择，回车确认"
                 echo ""
-                
-                gum style --foreground 99 "正在更新软件包..."
-                echo ""
-                echo "----------------------------------------"
-                
-                if pkg update && pkg upgrade -y; then
-                    echo "----------------------------------------"
-                    echo ""
-                    gum style --foreground 212 "✓ 软件包更新成功"
-                else
-                    echo "----------------------------------------"
-                    echo ""
-                    gum style --foreground 196 "✗ 软件包更新失败"
+
+                dep_action=$(gum choose --header "请选择操作" "安装酒馆依赖" "重装酒馆依赖" "取消操作")
+
+                if [[ -z "$dep_action" ]] || [[ "$dep_action" == "取消操作" ]]; then
+                    gum style --foreground 99 "已取消操作"
                     read -n 1 -s -r -p "按任意键返回主菜单..."
                     continue
                 fi
-                
+
+                if [[ "$dep_action" == "重装酒馆依赖" ]]; then
+                    gum style --foreground 99 "正在更新软件包..."
+                    echo ""
+                    echo "----------------------------------------"
+
+                    if pkg update && pkg upgrade -y; then
+                        echo "----------------------------------------"
+                        echo ""
+                        gum style --foreground 212 "✓ 软件包更新成功"
+                    else
+                        echo "----------------------------------------"
+                        echo ""
+                        gum style --foreground 196 "✗ 软件包更新失败"
+                        read -n 1 -s -r -p "按任意键返回主菜单..."
+                        continue
+                    fi
+                fi
+
                 echo ""
                 gum style --foreground 99 "正在安装依赖包..."
                 echo ""
                 echo "----------------------------------------"
-                
+
                 if pkg install git nodejs-lts nano -y; then
                     echo "----------------------------------------"
                     echo ""
@@ -1943,18 +1976,19 @@ main() {
                     echo ""
                     gum style --foreground 196 "✗ 依赖安装失败"
                 fi
-                
-                # 检查是否需要重装 npm 依赖
+
                 echo ""
                 if [[ -d "$ST_DIR" ]] && [[ -f "${ST_DIR}/package.json" ]]; then
-                    gum style --foreground 99 "正在清理旧的 npm 依赖..."
-                    echo ""
-                    rm -rf "${ST_DIR}/node_modules" "${ST_DIR}/package-lock.json"
-                    
+                    if [[ "$dep_action" == "重装酒馆依赖" ]]; then
+                        gum style --foreground 99 "正在清理旧的 npm 依赖..."
+                        echo ""
+                        rm -rf "${ST_DIR}/node_modules" "${ST_DIR}/package-lock.json"
+                    fi
+
                     gum style --foreground 99 "正在安装 npm 依赖..."
                     echo ""
                     echo "----------------------------------------"
-                    
+
                     if (cd "$ST_DIR" && npm install --no-audit --fund=false); then
                         echo "----------------------------------------"
                         echo ""
@@ -1965,7 +1999,7 @@ main() {
                         gum style --foreground 196 "✗ npm 依赖安装失败"
                     fi
                 fi
-                
+
                 echo ""
                 read -n 1 -s -r -p "按任意键返回主菜单..."
                 ;;
@@ -2160,7 +2194,11 @@ main() {
                         4)
                             gum style --foreground 212 --bold "添加其它脚本启动方式至主菜单"
                             echo ""
-                            gum style --foreground 245 "说明: 将自定义脚本或命令添加到主菜单，方便快速启动"
+                            gum style --foreground 245 "说明: 将常用脚本/命令添加到主菜单，方便一键启动"
+                            gum style --foreground 245 "操作建议:"
+                            gum style --foreground 245 "  1) 脚本文件: 适合已有 .sh 文件（最稳定）"
+                            gum style --foreground 245 "  2) 单行命令: 适合简单命令（如 syncthing）"
+                            gum style --foreground 245 "  3) 多行命令: 适合复杂命令（自动保存为脚本）"
                             echo ""
                             
                             local script_name=$(gum input --placeholder "输入脚本显示名称" --prompt "名称: " --width 40)
@@ -2171,9 +2209,20 @@ main() {
                             fi
                             
                             # 选择类型
-                            local script_type=$(gum choose "脚本文件 (需要bash执行)" "可执行命令 (如syncthing)" --header="选择类型")
+                            local script_type=$(gum choose \
+                                "脚本文件" \
+                                "单行命令" \
+                                "多行命令" \
+                                "取消" \
+                                --header="选择类型")
+
+                            if [[ -z "$script_type" ]] || [[ "$script_type" == "取消" ]]; then
+                                gum style --foreground 99 "已取消添加"
+                                read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                continue
+                            fi
                             
-                            if [[ "$script_type" == "脚本文件 (需要bash执行)" ]]; then
+                            if [[ "$script_type" == "脚本文件" ]]; then
                                 local script_path=$(gum input --placeholder "输入脚本完整路径" --prompt "路径: " --width 60)
                                 if [[ -z "$script_path" ]]; then
                                     gum style --foreground 99 "已取消添加"
@@ -2189,7 +2238,7 @@ main() {
                                 fi
                                 
                                 CUSTOM_SCRIPT_TYPE="file"
-                            else
+                            elif [[ "$script_type" == "单行命令" ]]; then
                                 local script_path=$(gum input --placeholder "输入命令名称 (如syncthing)" --prompt "命令: " --width 40)
                                 if [[ -z "$script_path" ]]; then
                                     gum style --foreground 99 "已取消添加"
@@ -2198,6 +2247,31 @@ main() {
                                 fi
                                 
                                 CUSTOM_SCRIPT_TYPE="command"
+                            else
+                                gum style --foreground 245 "请输入多行命令，保存后会自动生成脚本文件"
+                                gum style --foreground 245 "提示: Ctrl+D 结束输入"
+                                echo ""
+
+                                local script_body=$(gum write --placeholder "例如:\nexport API_HOST=127.0.0.1\ncurl http://127.0.0.1:5000/health")
+                                if [[ -z "$script_body" ]]; then
+                                    gum style --foreground 99 "已取消添加"
+                                    read -n 1 -s -r -p "按任意键返回设置菜单..."
+                                    continue
+                                fi
+
+                                local custom_dir="${SCRIPT_DIR}/custom_scripts"
+                                mkdir -p "$custom_dir"
+
+                                local safe_name=$(echo "$script_name" | sed 's/[^a-zA-Z0-9_-]/_/g')
+                                [[ -z "$safe_name" ]] && safe_name="custom_script"
+                                local script_path="${custom_dir}/${safe_name}.sh"
+
+                                cat > "$script_path" << EOF
+#!/bin/bash
+$script_body
+EOF
+                                chmod +x "$script_path"
+                                CUSTOM_SCRIPT_TYPE="file"
                             fi
                             
                             # 保存到配置文件
@@ -2206,7 +2280,12 @@ main() {
                             save_config
                             
                             gum style --foreground 212 "已添加自定义脚本: $script_name"
-                            gum style --foreground 99 "提示: 请重启脚本以在主菜单中看到此选项"
+                            if [[ "$CUSTOM_SCRIPT_TYPE" == "command" ]]; then
+                                gum style --foreground 99 "运行方式: bash -lc 执行单行命令"
+                            else
+                                gum style --foreground 99 "运行方式: bash 执行脚本文件"
+                            fi
+                            gum style --foreground 99 "提示: 可在主菜单直接按 8 启动"
                             read -n 1 -s -r -p "按任意键返回设置菜单..."
                             ;;
                         0) break ;;
@@ -2220,8 +2299,8 @@ main() {
                     echo ""
                     
                     if [[ "$CUSTOM_SCRIPT_TYPE" == "command" ]]; then
-                        # 直接执行命令
-                        $CUSTOM_SCRIPT_PATH
+                        # 使用 bash -lc 执行，避免复杂参数被错误分词
+                        bash -lc "$CUSTOM_SCRIPT_PATH"
                     else
                         # 执行脚本文件
                         if [[ -f "$CUSTOM_SCRIPT_PATH" ]]; then
